@@ -1,12 +1,12 @@
 [
 {
-  "modid": "vegaclicker",
-  "name": "Vega Clicker",
-  "description": "Vega - Clicker V2 | Coming Soon Edition, reborn as a Forge mod. Background auto-clicker with in-game customization and saved preferences. Made with <3 RuneGaming.",
+  "modid": "abaser",
+  "name": "Abaser",
+  "description": "A lightweight background auto-clicker for Minecraft 1.8.8, with an in-game menu, safety options and saved preferences.",
   "version": "${version}",
   "mcversion": "${mcversion}",
-  "authorList": ["RuneGaming"],
-  "credits": "Reconstructed from the original Vega-Clicker binary.",
+  "authorList": ["Abasing"],
+  "credits": "",
   "logoFile": "",
   "url": ""
 }

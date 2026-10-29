@@ -1,6 +1,5 @@
 // ============================================================================
-//  Abaser — Vega - Clicker V2 | Coming Soon Edition
-//  Minecraft 1.8.8 Forge mod (see README.md)
+//  Abaser — a Minecraft 1.8.8 Forge auto-clicker mod (see README.md)
 // ----------------------------------------------------------------------------
 //  Toolchain: JDK 8 + Gradle (see gradle/wrapper/gradle-wrapper.properties),
 //  classic ForgeGradle 2.1 (the line Forge rebuilt in 2021 to keep 1.8.x
@@ -23,7 +22,7 @@ buildscript {
 apply plugin: 'net.minecraftforge.gradle.forge'
 
 version = "2.0-dev.1"
-group = "com.runegaming.vegaclicker"
+group = "net.zaminmc.abaser"
 archivesBaseName = "Abaser-1.8.8"
 
 sourceCompatibility = targetCompatibility = '1.8'

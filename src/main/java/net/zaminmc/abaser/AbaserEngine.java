@@ -1,4 +1,4 @@
-package com.runegaming.vegaclicker;
+package net.zaminmc.abaser;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -7,6 +7,9 @@ import java.util.Random;
 import org.lwjgl.input.Mouse;
 
 import net.minecraft.client.Minecraft;
+import net.minecraft.item.ItemBow;
+import net.minecraft.item.ItemSword;
+import net.minecraft.item.ItemStack;
 
 import net.minecraftforge.fml.common.gameevent.TickEvent;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
@@ -18,7 +21,7 @@ import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
  * (Minecraft.clickMouse / rightClickMouse) via reflection, which runs the
  * exact vanilla attack/use code path.
  *
- * Faithfully preserved quirks (all optional, see VegaConfig.legacyTiming):
+ * Faithfully preserved quirks (all optional, see AbaserConfig.legacyTiming):
  *  - legacy delay math: 100/cps + (300|400)/cps2 ms per cycle
  *    (real rate runs ~2x the label -- this IS the original feel)
  *  - in legacy mode the right branch reads hitChance, not rightChance
@@ -26,8 +29,15 @@ import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
  *  - hit chance + block-hit chance rolls per click
  *  - randomized CPS drawn per click between min/max
  *  - one F4 press flips left AND right (the original bound both to F4)
+ *
+ * Safety gating (see the Safety tab of the menu):
+ *  - clicking always stops while any GUI / inventory / chat is open
+ *  - optional idle while the window is unfocused
+ *  - optional: no right clicks while holding a bow (draw and aim in peace)
+ *  - optional: no right clicks while using an item (eat / drink in peace)
+ *  - optional: left clicks only while holding a sword
  */
-public class ClickerEngine {
+public class AbaserEngine {
 
     private static final Random RNG = new Random();
 
@@ -53,9 +63,18 @@ public class ClickerEngine {
         Minecraft mc = Minecraft.getMinecraft();
         if (mc.thePlayer == null || mc.theWorld == null) return;
 
-        // Sane mod behavior: while any GUI is open we idle (the original exe
-        // kept posting clicks into your inventory, which was... spicy).
+        // While ANY screen is open (inventory, chest, chat, pause, menu) we
+        // idle and reset the schedule, so arming the clicker resumes cleanly
+        // the moment the screen closes.
         if (mc.currentScreen != null) {
+            long n = System.nanoTime();
+            nextLeftNs = n;
+            nextRightNs = n;
+            return;
+        }
+
+        // No clicks into an unfocused window either (a real player can't).
+        if (AbaserConfig.pauseUnfocused && !mc.inGameHasFocus) {
             long n = System.nanoTime();
             nextLeftNs = n;
             nextRightNs = n;
@@ -66,13 +85,15 @@ public class ClickerEngine {
 
         // ---- LEFT branch --------------------------------------------------
         // Original: GetAsyncKeyState(VK_LBUTTON) while left toggle is on.
-        if (VegaConfig.leftEnabled && Mouse.isButtonDown(0)) {
+        if (AbaserConfig.leftEnabled && Mouse.isButtonDown(0)) {
             if (now >= nextLeftNs) {
-                if (RNG.nextInt(100) < VegaConfig.hitChance) {
+                if (canLeftClick(mc) && RNG.nextInt(100) < AbaserConfig.hitChance) {
                     leftClick(mc);
                     // Block Hit: RMB tap right after the attack
                     // (original: WM_RBUTTONDOWN, 20 ms, WM_RBUTTONUP)
-                    if (VegaConfig.blockHit && RNG.nextInt(100) < VegaConfig.blockHitChance) {
+                    if (AbaserConfig.blockHit
+                            && canRightClick(mc)
+                            && RNG.nextInt(100) < AbaserConfig.blockHitChance) {
                         rightClick(mc);
                     }
                 }
@@ -83,12 +104,12 @@ public class ClickerEngine {
         }
 
         // ---- RIGHT branch -------------------------------------------------
-        if (VegaConfig.rightEnabled && Mouse.isButtonDown(1)) {
+        if (AbaserConfig.rightEnabled && Mouse.isButtonDown(1)) {
             if (now >= nextRightNs) {
                 // Original quirk: the right branch read hit_chance and never
                 // touched the right-chance slider. Kept in legacy mode only.
-                int chance = VegaConfig.legacyTiming ? VegaConfig.hitChance : VegaConfig.rightChance;
-                if (RNG.nextInt(100) < chance) {
+                int chance = AbaserConfig.legacyTiming ? AbaserConfig.hitChance : AbaserConfig.rightChance;
+                if (canRightClick(mc) && RNG.nextInt(100) < chance) {
                     rightClick(mc);
                 }
                 nextRightNs = now + rightIntervalNs();
@@ -96,6 +117,27 @@ public class ClickerEngine {
         } else {
             nextRightNs = now;
         }
+    }
+
+    // ---------------------------------------------------------------- gates
+
+    /** Sword-only mode: only attack while actually holding a sword. */
+    private static boolean canLeftClick(Minecraft mc) {
+        if (!AbaserConfig.swordOnly) return true;
+        ItemStack held = mc.thePlayer.getHeldItem();
+        return held != null && held.getItem() instanceof ItemSword;
+    }
+
+    /** Bow guard + use-item guard: right-click only when it makes sense. */
+    private static boolean canRightClick(Minecraft mc) {
+        ItemStack held = mc.thePlayer.getHeldItem();
+        if (AbaserConfig.noBowRight && held != null && held.getItem() instanceof ItemBow) {
+            return false;
+        }
+        if (AbaserConfig.noUseInterrupt && mc.thePlayer.isUsingItem()) {
+            return false;
+        }
+        return true;
     }
 
     // ---------------------------------------------------------------- timing
@@ -111,9 +153,9 @@ public class ClickerEngine {
      * Accurate mode is the "correct" 1000/cps math.
      */
     private static long leftIntervalNs() {
-        float cps = randBetween(VegaConfig.leftMinCps, VegaConfig.leftMaxCps);
-        if (VegaConfig.legacyTiming) {
-            float cps2 = randBetween(VegaConfig.leftMinCps, VegaConfig.leftMaxCps);
+        float cps = randBetween(AbaserConfig.leftMinCps, AbaserConfig.leftMaxCps);
+        if (AbaserConfig.legacyTiming) {
+            float cps2 = randBetween(AbaserConfig.leftMinCps, AbaserConfig.leftMaxCps);
             long ms = (long) (100f / cps) + (long) ((cps2 > 14.0f ? 300f : 400f) / cps2);
             return Math.max(ms, 1L) * 1000000L;
         }
@@ -121,9 +163,9 @@ public class ClickerEngine {
     }
 
     private static long rightIntervalNs() {
-        float cps = randBetween(VegaConfig.rightMinCps, VegaConfig.rightMaxCps);
-        if (VegaConfig.legacyTiming) {
-            float cps2 = randBetween(VegaConfig.rightMinCps, VegaConfig.rightMaxCps);
+        float cps = randBetween(AbaserConfig.rightMinCps, AbaserConfig.rightMaxCps);
+        if (AbaserConfig.legacyTiming) {
+            float cps2 = randBetween(AbaserConfig.rightMinCps, AbaserConfig.rightMaxCps);
             long ms = (long) (100f / cps) + (long) ((cps2 > 14.0f ? 300f : 400f) / cps2);
             return Math.max(ms, 1L) * 1000000L;
         }

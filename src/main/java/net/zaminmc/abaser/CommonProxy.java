@@ -1,10 +1,10 @@
-package com.runegaming.vegaclicker;
+package net.zaminmc.abaser;
 
 import net.minecraftforge.fml.common.event.FMLInitializationEvent;
 import net.minecraftforge.fml.common.event.FMLPreInitializationEvent;
 
 /**
- * Server-side no-op. Vega is a client-side mod; everything interesting
+ * Server-side no-op. Abaser is a client-side mod; everything interesting
  * happens in ClientProxy.
  */
 public class CommonProxy {

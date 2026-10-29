@@ -1,40 +1,29 @@
 # Abaser
 
-**Vega - Clicker V2 | Coming Soon Edition** — reborn as a Minecraft 1.8.8
-Forge mod.
+**Abaser** — a lightweight background auto-clicker for Minecraft **1.8.8**
+(Forge), with an in-game menu, safety options and saved preferences.
 
-The original was a standalone C++ tool (Dear ImGui + DirectX 9, MSVC) by
-**RuneGaming** — "Made with <3". Its compiled binary was recovered and
-reverse-engineered back into source (kept under [`legacy/`](legacy/) so it
-can never be lost again), and this repo is that tool's second life: same
-defaults, same accent color, same tabs, same click rhythm, same quirks —
-now living *inside* the game.
-
-## Why a mod
-
-| The standalone exe | Abaser |
-|---|---|
-| Run it next to the game, hope it finds the window | Loads with Forge, always there |
-| Console window hidden by force every frame | No terminal, ever |
-| Settings in memory, `imgui.ini` deleted on exit | Preferences persist in `config/vegaclicker.cfg` |
-| Fixed binds (F4 / INSERT) | Rebindable in vanilla Controls |
-| Dead "Configs" tab saying NOTHING YET | Working Save / Reload / Defaults |
+It loads with Forge and runs silently in the background (no terminal, no
+extra windows, nothing in your face) until you press **F4** or **INSERT**.
+Hold your physical mouse button and the engine clicks *for* you, honoring
+hit-chance and randomized CPS — it calls the game's own
+`clickMouse()` / `rightClickMouse()` through reflection, so every click
+runs the real vanilla attack/use code path. A small HUD shows live CPS
+while armed.
 
 ## Usage
 
 | Control | Default | Action |
 |---|---|---|
-| Toggle clicker | **F4** | Arms/disarms left + right clicker (original bind, 150 ms debounce) |
-| Vega menu | **INSERT** | Opens the in-game menu (original: hide window) |
-| `/vega` | — | `on` / `off` / `toggle` / `status`, or bare to open the menu |
+| Toggle clicker | **F4** | Arms/disarms left + right clicker together (150 ms debounce) |
+| Abaser menu | **INSERT** | Opens the in-game menu (5 tabs, draggable panel) |
+| `/abaser` | — | `on` / `off` / `toggle` / `status`, or bare to open the menu |
 
-Hold your physical mouse button and the engine clicks *for* you, honoring
-hit-chance and randomized CPS — it calls the game's own
-`clickMouse()` / `rightClickMouse()` through reflection, so every click runs
-the real vanilla attack/use code path. A small HUD shows live CPS while
-armed.
+Everything is rebindable in vanilla **Options > Controls > Abaser**.
+Preferences persist in `config/abaser.cfg` and autosave whenever the menu
+closes.
 
-## Defaults (recovered from the original binary)
+## Clicker settings
 
 | Setting | Default | Range |
 |---|---|---|
@@ -45,24 +34,35 @@ armed.
 | Block Hit | on, 6 % | 1–25 % |
 | Accent color | #FF23FF | RGB sliders |
 
-## Original quirks — kept on purpose
+## Safety options
 
-These are the details that made the original *feel* like the original, so
-they are preserved (and toggleable in the menu):
+The Safety tab keeps the clicker out of situations where spamming clicks
+would hurt you:
 
-1. **Legacy Vega timing** (Misc tab, default ON): the original engine slept
-   `100/cps` then `(300|400)/cps2` ms per click — a factor-of-ten "bug".
-   Real click rate runs ~2x the label. That ~22 CPS rhythm at "10 CPS"?
-   That's the original. Turn it off for mathematically-accurate CPS.
-2. **F4 flips left AND right together** — the original bound both toggles
-   to the same key.
-3. **Right branch reads hit chance in legacy mode** — the original's
-   right-chance slider wrote a variable the engine never read. The slider
-   is honored only in accurate mode.
+| Option | Default | What it does |
+|---|---|---|
+| No bow right-click | **on** | While holding a bow, right clicks are held off — draw and aim normally instead of spam-firing |
+| Sword-only attack | off | Left clicks only fire while you are actually holding a sword |
+| No click while eating | **on** | Right clicks pause while using an item (eating, drinking potions, drawing a bow), so nothing gets interrupted |
+| Pause when unfocused | **on** | No clicks go into an unfocused window — a real player can't either |
+
+In addition, clicking **always stops while any GUI is open** — inventory,
+chest, chat, pause menu, anything. That one is not optional; it is simply
+how a sane mod behaves.
+
+## Engine quirks — kept on purpose
+
+The click rhythm reproduces the feel of the tool this mod grew out of
+(the recovered source lives under [`legacy/`](legacy/)), quirks included:
+
+1. **Legacy timing** (Misc tab, default ON): the engine sleeps `100/cps`
+   then `(300|400)/cps2` ms per click — real click rate runs ~2x the
+   label. That ~22 CPS rhythm at "10 CPS" is intentional. Turn it off for
+   mathematically-accurate CPS.
+2. **F4 flips left AND right together** — both toggles ride one key.
+3. **Right branch reads hit chance in legacy mode** — the right-chance
+   slider is honored only in accurate mode.
 4. **Block Hit** = right-click tap right after an attack (the 1.8 classic).
-
-Sane-mod differences: clicking pauses while any GUI is open, and the mod is
-client-side only.
 
 ## Releases — the autopublish pipeline
 
@@ -110,23 +110,30 @@ Toolchain notes (all verified by actually building this way):
 ## Project layout
 
 ```
-src/main/java/com/runegaming/vegaclicker/
-├── VegaClicker.java        @Mod entry, config load
+src/main/java/net/zaminmc/abaser/
+├── Abaser.java             @Mod entry, config load
 ├── CommonProxy.java        server no-op
 ├── ClientProxy.java        client wiring (buses, command)
-├── VegaConfig.java         preference persistence (config/vegaclicker.cfg)
-├── VegaKeys.java           F4 / INSERT keybinds + debounce
-├── ClickerEngine.java      the engine: timing math, chance rolls, clicks
-├── VegaHud.java            in-game status overlay w/ live CPS
-├── CommandVega.java        /vega chat command
+├── AbaserConfig.java       preference persistence (config/abaser.cfg)
+├── AbaserKeys.java         F4 / INSERT keybinds + debounce
+├── AbaserEngine.java       the engine: timing math, chance rolls, safety gates, clicks
+├── AbaserHud.java          in-game status overlay w/ live CPS
+├── CommandAbaser.java      /abaser chat command
 └── gui/
-    └── VegaGuiScreen.java  the in-game menu (4 tabs, draggable, sliders)
-legacy/                     the recovered C++ source of the original exe
+    └── AbaserGuiScreen.java  the in-game menu (5 tabs, draggable, sliders)
+legacy/                     the recovered C++ source this mod grew out of
 .github/workflows/release.yml   the autopublish pipeline
 ```
+
+## History
+
+The click rhythm and defaults were recovered by reverse-engineering a
+lost standalone tool; its reconstructed source is preserved under
+[`legacy/`](legacy/) so it can never be lost again. Abaser is that
+engine's second life — now living inside the game.
 
 ## Fair play
 
 An auto-clicker is an unfair advantage on most PvP servers — this is a
-reconstruction of a personal tool, for your own use (1.8.8 PvP practice,
-private servers, nostalgia). Don't be that guy on servers that forbid it.
+personal tool, for your own use (1.8.8 PvP practice, private servers,
+nostalgia). Don't be that guy on servers that forbid it.

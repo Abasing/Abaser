@@ -1,4 +1,4 @@
-package com.runegaming.vegaclicker;
+package net.zaminmc.abaser;
 
 import java.util.Locale;
 
@@ -13,29 +13,28 @@ import net.minecraftforge.fml.client.registry.ClientRegistry;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.common.gameevent.InputEvent;
 
-import com.runegaming.vegaclicker.gui.VegaGuiScreen;
+import net.zaminmc.abaser.gui.AbaserGuiScreen;
 
 /**
- * Keybinds, straight from the original binary:
+ * Keybinds:
  *
- *   F4      -- toggle the clicker (the original bound BOTH the left and the
- *              right toggle to F4, so one press flips both; 150 ms debounce
- *              like the original watcher at 0x1400461B0)
- *   INSERT  -- the original hid the overlay window; in the mod it opens the
- *              in-game menu instead
+ *   F4      -- toggle the clicker (both the left and the right toggle, one
+ *              press flips both, exactly like the original bind; 150 ms
+ *              debounce like the original watcher at 0x1400461B0)
+ *   INSERT  -- opens the in-game menu
  *
- * Both are rebindable through Options > Controls > Vega Clicker.
+ * Both are rebindable through Options > Controls > Abaser.
  */
-public class VegaKeys {
+public class AbaserKeys {
 
     public static KeyBinding toggleClicker;
     public static KeyBinding openGui;
 
     public static void register() {
-        toggleClicker = new KeyBinding("key.vegaclicker.toggle",
-                Keyboard.KEY_F4, "key.categories.vegaclicker");
-        openGui = new KeyBinding("key.vegaclicker.gui",
-                Keyboard.KEY_INSERT, "key.categories.vegaclicker");
+        toggleClicker = new KeyBinding("key.abaser.toggle",
+                Keyboard.KEY_F4, "key.categories.abaser");
+        openGui = new KeyBinding("key.abaser.gui",
+                Keyboard.KEY_INSERT, "key.categories.abaser");
         ClientRegistry.registerKeyBinding(toggleClicker);
         ClientRegistry.registerKeyBinding(openGui);
     }
@@ -50,16 +49,16 @@ public class VegaKeys {
         if (toggleClicker.isPressed()) {
             if (now - lastToggleMs >= 150L) { // original debounce window
                 lastToggleMs = now;
-                VegaConfig.leftEnabled = !VegaConfig.leftEnabled;
-                VegaConfig.rightEnabled = !VegaConfig.rightEnabled;
+                AbaserConfig.leftEnabled = !AbaserConfig.leftEnabled;
+                AbaserConfig.rightEnabled = !AbaserConfig.rightEnabled;
 
-                if (VegaConfig.toggleChatFeedback && mc.thePlayer != null) {
-                    boolean on = VegaConfig.leftEnabled || VegaConfig.rightEnabled;
-                    String msg = EnumChatFormatting.LIGHT_PURPLE + "[Vega] "
+                if (AbaserConfig.toggleChatFeedback && mc.thePlayer != null) {
+                    boolean on = AbaserConfig.leftEnabled || AbaserConfig.rightEnabled;
+                    String msg = EnumChatFormatting.LIGHT_PURPLE + "[Abaser] "
                             + EnumChatFormatting.GRAY + "Clicker " + (on ? "ON" : "OFF")
-                            + "  L " + fmt(VegaConfig.leftMinCps) + "-" + fmt(VegaConfig.leftMaxCps)
-                            + "  R " + fmt(VegaConfig.rightMinCps) + "-" + fmt(VegaConfig.rightMaxCps)
-                            + "  " + VegaConfig.hitChance + "%";
+                            + "  L " + fmt(AbaserConfig.leftMinCps) + "-" + fmt(AbaserConfig.leftMaxCps)
+                            + "  R " + fmt(AbaserConfig.rightMinCps) + "-" + fmt(AbaserConfig.rightMaxCps)
+                            + "  " + AbaserConfig.hitChance + "%";
                     mc.thePlayer.addChatMessage(new ChatComponentText(msg));
                 }
             }
@@ -67,7 +66,7 @@ public class VegaKeys {
 
         if (openGui.isPressed()) {
             if (mc.currentScreen == null) {
-                mc.displayGuiScreen(new VegaGuiScreen());
+                mc.displayGuiScreen(new AbaserGuiScreen());
             }
         }
     }

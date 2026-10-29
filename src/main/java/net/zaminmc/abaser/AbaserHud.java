@@ -1,4 +1,4 @@
-package com.runegaming.vegaclicker;
+package net.zaminmc.abaser;
 
 import java.util.Locale;
 
@@ -12,13 +12,13 @@ import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
  * Drawn in the accent color while the clicker is armed; stays out of the
  * way of the F3 debug screen.
  */
-public class VegaHud {
+public class AbaserHud {
 
     @SubscribeEvent
     public void onRenderOverlay(RenderGameOverlayEvent.Post event) {
         if (event.type != RenderGameOverlayEvent.ElementType.TEXT) return;
-        if (!VegaConfig.hudEnabled) return;
-        if (!VegaConfig.leftEnabled && !VegaConfig.rightEnabled) return;
+        if (!AbaserConfig.hudEnabled) return;
+        if (!AbaserConfig.leftEnabled && !AbaserConfig.rightEnabled) return;
 
         Minecraft mc = Minecraft.getMinecraft();
         if (mc.thePlayer == null || mc.theWorld == null) return;
@@ -27,19 +27,19 @@ public class VegaHud {
         int y = 4;
         if (mc.gameSettings.showDebugInfo) y += 48; // keep clear of F3
 
-        int accent = VegaConfig.accentColor();
+        int accent = AbaserConfig.accentColor();
 
-        mc.fontRendererObj.drawStringWithShadow("Vega", x, y, accent);
-        int wx = x + mc.fontRendererObj.getStringWidth("Vega") + 5;
+        mc.fontRendererObj.drawStringWithShadow("Abaser", x, y, accent);
+        int wx = x + mc.fontRendererObj.getStringWidth("Abaser") + 5;
 
         StringBuilder sb = new StringBuilder();
-        if (VegaConfig.leftEnabled) {
-            sb.append("L:ON ").append(fmt(ClickerEngine.leftCps)).append("cps ");
+        if (AbaserConfig.leftEnabled) {
+            sb.append("L:ON ").append(fmt(AbaserEngine.leftCps)).append("cps ");
         } else {
             sb.append("L:off ");
         }
-        if (VegaConfig.rightEnabled) {
-            sb.append("R:ON ").append(fmt(ClickerEngine.rightCps)).append("cps");
+        if (AbaserConfig.rightEnabled) {
+            sb.append("R:ON ").append(fmt(AbaserEngine.rightCps)).append("cps");
         } else {
             sb.append("R:off");
         }

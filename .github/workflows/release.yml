@@ -4,7 +4,7 @@ name: release
 # build automatically (mirrors the ZaminTorch release pipeline):
 #
 #   1. compute N over the abaser-1.8.8-N tag ledger;
-#   2. stamp the version into build.gradle and VegaClicker.VERSION
+#   2. stamp the version into build.gradle and Abaser.VERSION
 #      (mcmod.info picks it up automatically through processResources);
 #   3. sync the bump back to develop as an Abasing-authored "[skip ci]"
 #      commit (the loop-breaker: the pipeline's own push must not retrigger)
@@ -136,10 +136,10 @@ jobs:
           V="${{ steps.version.outputs.version }}"
           sed -i "s/^version = \"[^\"]*\"/version = \"$V\"/" build.gradle
           sed -i "s/public static final String VERSION = \"[^\"]*\";/public static final String VERSION = \"$V\";/" \
-            src/main/java/com/runegaming/vegaclicker/VegaClicker.java
+            src/main/java/net/zaminmc/abaser/Abaser.java
           echo "--- stamped:"
           grep -n '^version' build.gradle
-          grep -n 'String VERSION' src/main/java/com/runegaming/vegaclicker/VegaClicker.java
+          grep -n 'String VERSION' src/main/java/net/zaminmc/abaser/Abaser.java
 
       - name: Sync the version bump back to develop (as Abasing)
         if: steps.version.outputs.skip != 'true' && steps.version.outputs.repair != 'true'
@@ -153,7 +153,7 @@ jobs:
             exit 0
           fi
           git add build.gradle \
-                  src/main/java/com/runegaming/vegaclicker/VegaClicker.java
+                  src/main/java/net/zaminmc/abaser/Abaser.java
           git commit -m "release: $TAG — version bump [skip ci]"
           for attempt in 1 2; do
             if git pull --rebase origin develop && git push origin develop; then
@@ -264,7 +264,7 @@ jobs:
             echo
             echo "1. Minecraft 1.8.8 with Forge \`11.15.0.1655\` (or any 11.15.x)."
             echo "2. Drop the jar into \`.minecraft/mods\` — it loads silently with the game (no launcher, no console)."
-            echo "3. **F4** toggles the clicker, **INSERT** opens the in-game menu, \`/vega\` for chat control. Preferences persist in \`config/vegaclicker.cfg\`."
+            echo "3. **F4** toggles the clicker, **INSERT** opens the in-game menu, \`/abaser\` for chat control. Preferences persist in \`config/abaser.cfg\`."
           } > notes.md
           echo "--- notes.md (first 40 lines):"
           head -40 notes.md

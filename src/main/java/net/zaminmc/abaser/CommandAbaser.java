@@ -1,4 +1,4 @@
-package com.runegaming.vegaclicker;
+package net.zaminmc.abaser;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -13,26 +13,26 @@ import net.minecraft.util.BlockPos;
 import net.minecraft.util.ChatComponentText;
 import net.minecraft.util.EnumChatFormatting;
 
-import com.runegaming.vegaclicker.gui.VegaGuiScreen;
+import net.zaminmc.abaser.gui.AbaserGuiScreen;
 
 /**
- * /vega -- chat control, because sometimes your hands are busy.
+ * /abaser -- chat control, because sometimes your hands are busy.
  *
- *   /vega            open the menu
- *   /vega on|off     arm/disarm the clicker
- *   /vega toggle     same as pressing F4
- *   /vega status     current settings dump
+ *   /abaser            open the menu
+ *   /abaser on|off     arm/disarm the clicker
+ *   /abaser toggle     same as pressing F4
+ *   /abaser status     current settings dump
  */
-public class CommandVega extends CommandBase {
+public class CommandAbaser extends CommandBase {
 
     @Override
     public String getCommandName() {
-        return "vega";
+        return "abaser";
     }
 
     @Override
     public String getCommandUsage(ICommandSender sender) {
-        return "/vega [on|off|toggle|status]";
+        return "/abaser [on|off|toggle|status]";
     }
 
     @Override
@@ -48,7 +48,7 @@ public class CommandVega extends CommandBase {
     @Override
     public void processCommand(ICommandSender sender, String[] args) throws CommandException {
         if (args.length == 0) {
-            Minecraft.getMinecraft().displayGuiScreen(new VegaGuiScreen());
+            Minecraft.getMinecraft().displayGuiScreen(new AbaserGuiScreen());
             return;
         }
 
@@ -56,41 +56,43 @@ public class CommandVega extends CommandBase {
         boolean on;
 
         if ("on".equals(sub)) {
-            VegaConfig.leftEnabled = true;
-            VegaConfig.rightEnabled = true;
+            AbaserConfig.leftEnabled = true;
+            AbaserConfig.rightEnabled = true;
             on = true;
         } else if ("off".equals(sub)) {
-            VegaConfig.leftEnabled = false;
-            VegaConfig.rightEnabled = false;
+            AbaserConfig.leftEnabled = false;
+            AbaserConfig.rightEnabled = false;
             on = false;
         } else if ("toggle".equals(sub)) {
-            VegaConfig.leftEnabled = !VegaConfig.leftEnabled;
-            VegaConfig.rightEnabled = !VegaConfig.rightEnabled;
-            on = VegaConfig.leftEnabled || VegaConfig.rightEnabled;
+            AbaserConfig.leftEnabled = !AbaserConfig.leftEnabled;
+            AbaserConfig.rightEnabled = !AbaserConfig.rightEnabled;
+            on = AbaserConfig.leftEnabled || AbaserConfig.rightEnabled;
         } else if ("status".equals(sub)) {
             sender.addChatMessage(new ChatComponentText(
-                    EnumChatFormatting.LIGHT_PURPLE + "[Vega] "
+                    EnumChatFormatting.LIGHT_PURPLE + "[Abaser] "
                     + EnumChatFormatting.GRAY + describe()));
             return;
         } else {
             throw new WrongUsageException(getCommandUsage(sender));
         }
 
-        VegaConfig.save();
+        AbaserConfig.save();
         sender.addChatMessage(new ChatComponentText(
-                EnumChatFormatting.LIGHT_PURPLE + "[Vega] "
+                EnumChatFormatting.LIGHT_PURPLE + "[Abaser] "
                 + EnumChatFormatting.GRAY + "Clicker " + (on ? "ON" : "OFF")));
     }
 
     private String describe() {
         return String.format(Locale.US,
-                "Clicker %s | L %.1f-%.1f cps | R %.1f-%.1f cps | hit %d%% | blockhit %s (%d%%) | legacy %s",
-                (VegaConfig.leftEnabled || VegaConfig.rightEnabled) ? "ON" : "OFF",
-                VegaConfig.leftMinCps, VegaConfig.leftMaxCps,
-                VegaConfig.rightMinCps, VegaConfig.rightMaxCps,
-                VegaConfig.hitChance,
-                VegaConfig.blockHit ? "on" : "off", VegaConfig.blockHitChance,
-                VegaConfig.legacyTiming ? "on" : "off");
+                "Clicker %s | L %.1f-%.1f cps | R %.1f-%.1f cps | hit %d%% | blockhit %s (%d%%) | legacy %s | sword-only %s | bow-guard %s",
+                (AbaserConfig.leftEnabled || AbaserConfig.rightEnabled) ? "ON" : "OFF",
+                AbaserConfig.leftMinCps, AbaserConfig.leftMaxCps,
+                AbaserConfig.rightMinCps, AbaserConfig.rightMaxCps,
+                AbaserConfig.hitChance,
+                AbaserConfig.blockHit ? "on" : "off", AbaserConfig.blockHitChance,
+                AbaserConfig.legacyTiming ? "on" : "off",
+                AbaserConfig.swordOnly ? "on" : "off",
+                AbaserConfig.noBowRight ? "on" : "off");
     }
 
     @Override

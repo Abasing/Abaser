@@ -1,4 +1,4 @@
-package com.runegaming.vegaclicker;
+package net.zaminmc.abaser;
 
 import java.io.File;
 
@@ -7,18 +7,19 @@ import net.minecraftforge.fml.client.event.ConfigChangedEvent;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 
 /**
- * Preference saving. Everything the original tool exposed lives here and is
- * persisted to config/vegaclicker.cfg -- the mod-equivalent of the original's
- * in-memory settings plus imgui.ini, except it actually survives reboots.
+ * Preference saving. Everything the menu exposes lives here and is
+ * persisted to config/abaser.cfg -- preferences survive reboots.
  *
- * Defaults are the exact values recovered from the original binary
- * (see the Vega-Clicker-recovered analysis notes).
+ * Clicker defaults are the values recovered from the original binary
+ * (see legacy/analysis/REVERSE_ENGINEERING_NOTES.md); the safety options
+ * are sane mod-side additions.
  */
-public class VegaConfig {
+public class AbaserConfig {
 
     public static final String CATEGORY_CLICKER = "clicker";
     public static final String CATEGORY_MISC    = "misc";
     public static final String CATEGORY_GUI     = "gui";
+    public static final String CATEGORY_SAFETY  = "safety";
 
     // ---- clicker (defaults recovered from the original .data section) ----
     public static boolean leftEnabled  = false;         // toggled at runtime with F4
@@ -35,6 +36,12 @@ public class VegaConfig {
     public static int     blockHitChance    = 6;        // slider range 1 - 25
     public static boolean legacyTiming      = true;     // reproduce the original 100/cps delay math
     public static boolean toggleChatFeedback = true;
+
+    // ---- safety ----
+    public static boolean noBowRight     = true;   // no right clicks while holding a bow
+    public static boolean noUseInterrupt = true;   // no right clicks while eating / drinking / using an item
+    public static boolean swordOnly      = false;  // left clicks only while holding a sword
+    public static boolean pauseUnfocused = true;   // idle while the game window is unfocused
 
     // ---- gui (accent color: 1.00, 0.137, 1.00 in the original) ----
     public static float    accentR         = 1.000f;
@@ -78,6 +85,11 @@ public class VegaConfig {
         legacyTiming     = configuration.getBoolean("legacyTiming",       CATEGORY_MISC, legacyTiming,       "Reproduce the original engine's 100/cps delay math -- real rate runs ~2x the label, exactly like the original exe");
         toggleChatFeedback = configuration.getBoolean("toggleChatFeedback", CATEGORY_MISC, toggleChatFeedback, "Chat message when the clicker is toggled");
 
+        noBowRight     = configuration.getBoolean("noBowRight",     CATEGORY_SAFETY, noBowRight,     "No right clicks while holding a bow, so you can draw and aim normally");
+        noUseInterrupt = configuration.getBoolean("noUseInterrupt", CATEGORY_SAFETY, noUseInterrupt, "No right clicks while using an item (eating, drinking, drawing)");
+        swordOnly      = configuration.getBoolean("swordOnly",      CATEGORY_SAFETY, swordOnly,      "Left clicks only while holding a sword");
+        pauseUnfocused = configuration.getBoolean("pauseUnfocused", CATEGORY_SAFETY, pauseUnfocused, "Idle while the game window is unfocused");
+
         accentR        = configuration.getFloat("accentR", CATEGORY_GUI, accentR, 0.0f, 1.0f, "Accent red (original 1.000)");
         accentG        = configuration.getFloat("accentG", CATEGORY_GUI, accentG, 0.0f, 1.0f, "Accent green (original 0.137)");
         accentB        = configuration.getFloat("accentB", CATEGORY_GUI, accentB, 0.0f, 1.0f, "Accent blue (original 1.000)");
@@ -104,6 +116,10 @@ public class VegaConfig {
         putInt  (CATEGORY_MISC, "blockHitChance",    blockHitChance,    "");
         putBool (CATEGORY_MISC, "legacyTiming",      legacyTiming,      "");
         putBool (CATEGORY_MISC, "toggleChatFeedback", toggleChatFeedback, "");
+        putBool (CATEGORY_SAFETY, "noBowRight",     noBowRight,     "");
+        putBool (CATEGORY_SAFETY, "noUseInterrupt", noUseInterrupt, "");
+        putBool (CATEGORY_SAFETY, "swordOnly",      swordOnly,      "");
+        putBool (CATEGORY_SAFETY, "pauseUnfocused", pauseUnfocused, "");
         putFloat(CATEGORY_GUI, "accentR",         accentR,         "");
         putFloat(CATEGORY_GUI, "accentG",         accentG,         "");
         putFloat(CATEGORY_GUI, "accentB",         accentB,         "");
@@ -126,7 +142,7 @@ public class VegaConfig {
 
     // ---------------------------------------------------------------- helpers
 
-    /** Restore the values recovered from the original binary. */
+    /** Restore the default values. */
     public static void resetDefaults() {
         leftEnabled = false;  rightEnabled = false;
         leftMinCps = 9.6f;    leftMaxCps = 14.0f;
@@ -134,6 +150,8 @@ public class VegaConfig {
         hitChance = 87;       rightChance = 80;
         blockHit = true;      blockHitChance = 6;
         legacyTiming = true;  toggleChatFeedback = true;
+        noBowRight = true;    noUseInterrupt = true;
+        swordOnly = false;    pauseUnfocused = true;
         accentR = 1.000f;     accentG = 0.137f;    accentB = 1.000f;
         otherBackground = true; hudEnabled = true;
     }
@@ -158,7 +176,7 @@ public class VegaConfig {
     public static class EventHandler {
         @SubscribeEvent
         public void onConfigChanged(ConfigChangedEvent.OnConfigChangedEvent event) {
-            if (VegaClicker.MODID.equals(event.modID)) reload();
+            if (Abaser.MODID.equals(event.modID)) reload();
         }
     }
 }
