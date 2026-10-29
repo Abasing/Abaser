@@ -1,0 +1,53 @@
+// ============================================================================
+//  Abaser — Vega - Clicker V2 | Coming Soon Edition
+//  Minecraft 1.8.8 Forge mod (see README.md)
+// ----------------------------------------------------------------------------
+//  Toolchain: JDK 8 + Gradle (see gradle/wrapper/gradle-wrapper.properties),
+//  classic ForgeGradle 2.1 (the line Forge rebuilt in 2021 to keep 1.8.x
+//  modding alive after the maven migration).
+//
+//  NOTE: the version string below is stamped automatically by the release
+//  pipeline (.github/workflows/release.yml) — edit it only for manual
+//  local builds; every push to develop republishes it.
+// ============================================================================
+
+buildscript {
+    repositories {
+        maven { url = "https://maven.minecraftforge.net" }
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'net.minecraftforge.gradle:ForgeGradle:2.1-SNAPSHOT'
+    }
+}
+apply plugin: 'net.minecraftforge.gradle.forge'
+
+version = "2.0"
+group = "com.runegaming.vegaclicker"
+archivesBaseName = "Abaser-1.8.8"
+
+sourceCompatibility = targetCompatibility = '1.8'
+compileJava {
+    sourceCompatibility = targetCompatibility = '1.8'
+}
+
+minecraft {
+    version = "1.8.8-11.15.0.1655"
+    runDir = "run"
+    // MCP stable_20 is the final stable mapping channel for 1.8.8.
+    mappings = "stable_20"
+}
+
+processResources {
+    // keep mcmod.info's version in sync with the build version
+    inputs.property "version", project.version
+    inputs.property "mcversion", project.minecraft.version
+
+    from(sourceSets.main.resources.srcDirs) {
+        include 'mcmod.info'
+        expand 'version': project.version, 'mcversion': project.minecraft.version
+    }
+    from(sourceSets.main.resources.srcDirs) {
+        exclude 'mcmod.info'
+    }
+}
