@@ -1,0 +1,40 @@
+Vega-Clicker — 48-byte string-obfuscation XOR key
+(recovered from the movabs/pxor sequences in main, 0x1400467xx–0x1400480xx)
+===============================================================================
+
+As little-endian u64 words (the order the registers hold them):
+
+  r15 = 0x8118b5b2183014a7
+  r14 = 0x9ab7bae35936a050
+  k2  = 0x9ca7d1fc536407d9
+  rbx = 0x3201677d57919eda
+  k4  = 0x5e3342ae6df551fb
+  k5  = 0x190c352f4c1ed6d4
+
+As a 48-byte array (hex):
+
+  a7 14 30 18 b2 b5 18 81   50 a0 36 59 e3 ba b7 9a
+  d9 07 64 53 fc d1 a7 9c   da 9e 19 57 7d 67 01 32
+  fb 51 f5 6d ae 42 33 5e   d4 d6 1e 4c 2f 35 0c 19
+
+Usage: every user-visible string in the UI was stored encrypted with this
+key (applied cyclically per 8-byte word, first word with r15's value) and
+XOR-decoded onto the stack right before each ImGui call.
+
+Strings recovered with it include:
+
+  "Vega - Clicker V2 | Coming Soon Edition"
+  "SidePanel"
+  "Clicker"  "Misc"  "Settings"  "Canvas"
+  "Left Toggle"  "Left Bind"   "%.1f LCPS"
+  "Right Toggle" "Right Bind"  "%.1f RCPS"
+  "Block Hit"
+  "Note: This is only for Left Click"
+  "NOTHING YET - Configs"
+  "Application average %.3f ms/frame (%.1f FPS)"
+  "Hide Window: "  "Bind"  "DrawList"
+  "Made with <3\nRuneGaming"
+  "del imgui.ini"          (passed to system() on exit)
+  "LWJGL"                  (FindWindowA class name — the Minecraft window)
+
+— which is "the key" the file name promised.
