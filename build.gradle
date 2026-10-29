@@ -22,7 +22,7 @@ buildscript {
 }
 apply plugin: 'net.minecraftforge.gradle.forge'
 
-version = "2.0"
+version = "2.0-dev.1"
 group = "com.runegaming.vegaclicker"
 archivesBaseName = "Abaser-1.8.8"
 

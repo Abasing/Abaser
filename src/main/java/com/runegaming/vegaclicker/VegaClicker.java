@@ -22,7 +22,7 @@ public class VegaClicker {
 
     public static final String MODID   = "vegaclicker";
     public static final String NAME    = "Vega Clicker";
-    public static final String VERSION = "2.0";
+    public static final String VERSION = "2.0-dev.1";
 
     public static Logger logger;
 
