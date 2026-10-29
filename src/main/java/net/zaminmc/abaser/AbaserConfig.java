@@ -20,6 +20,8 @@ public class AbaserConfig {
     public static final String CATEGORY_MISC    = "misc";
     public static final String CATEGORY_GUI     = "gui";
     public static final String CATEGORY_SAFETY  = "safety";
+    public static final String CATEGORY_TARGET  = "target";
+    public static final String CATEGORY_ZONES   = "zones";
 
     // ---- clicker (defaults recovered from the original .data section) ----
     public static boolean leftEnabled  = false;         // toggled at runtime with F4
@@ -38,10 +40,18 @@ public class AbaserConfig {
     public static boolean toggleChatFeedback = true;
 
     // ---- safety ----
-    public static boolean noBowRight     = true;   // no right clicks while holding a bow
+    public static boolean noBowRight     = true;   // holding a bow: the clicker holds off entirely
     public static boolean noUseInterrupt = true;   // no right clicks while eating / drinking / using an item
     public static boolean swordOnly      = false;  // left clicks only while holding a sword
     public static boolean pauseUnfocused = true;   // idle while the game window is unfocused
+
+    // ---- target (the except list) ----
+    public static boolean exceptEnabled = true;    // hold left clicks while the crosshair is on a listed name
+
+    // ---- zones (world regions) ----
+    public static boolean zonesEnabled = true;     // master switch for zone hold-off
+    public static boolean zoneOverlay  = true;     // wireframe preview while the menu is open
+    // (the zone list itself lives in AbaserZones.zones)
 
     // ---- gui (accent color: 1.00, 0.137, 1.00 in the original) ----
     public static float    accentR         = 1.000f;
@@ -85,10 +95,20 @@ public class AbaserConfig {
         legacyTiming     = configuration.getBoolean("legacyTiming",       CATEGORY_MISC, legacyTiming,       "Reproduce the original engine's 100/cps delay math -- real rate runs ~2x the label, exactly like the original exe");
         toggleChatFeedback = configuration.getBoolean("toggleChatFeedback", CATEGORY_MISC, toggleChatFeedback, "Chat message when the clicker is toggled");
 
-        noBowRight     = configuration.getBoolean("noBowRight",     CATEGORY_SAFETY, noBowRight,     "No right clicks while holding a bow, so you can draw and aim normally");
+        noBowRight     = configuration.getBoolean("noBowRight",     CATEGORY_SAFETY, noBowRight,     "Holding a bow holds the whole clicker off, so you can draw and aim normally");
         noUseInterrupt = configuration.getBoolean("noUseInterrupt", CATEGORY_SAFETY, noUseInterrupt, "No right clicks while using an item (eating, drinking, drawing)");
         swordOnly      = configuration.getBoolean("swordOnly",      CATEGORY_SAFETY, swordOnly,      "Left clicks only while holding a sword");
         pauseUnfocused = configuration.getBoolean("pauseUnfocused", CATEGORY_SAFETY, pauseUnfocused, "Idle while the game window is unfocused");
+
+        // target + zones
+        exceptEnabled = configuration.getBoolean("exceptEnabled", CATEGORY_TARGET, exceptEnabled, "Hold off left clicks while the crosshair is on a name in the except list");
+        AbaserTarget.fromArray(configuration.getStringList("exceptList", CATEGORY_TARGET,
+                AbaserTarget.toArray(), "Names the clicker never targets: player names, custom names or entity types (Cow, Zombie); '*' wildcard allowed"));
+
+        zonesEnabled = configuration.getBoolean("zonesEnabled", CATEGORY_ZONES, zonesEnabled, "World zones: hold the clicker off inside (or outside) the defined regions");
+        zoneOverlay  = configuration.getBoolean("zoneOverlay",  CATEGORY_ZONES, zoneOverlay,  "Draw the zone wireframe while the Abaser menu is open");
+        AbaserZones.fromArray(configuration.getStringList("zones", CATEGORY_ZONES,
+                AbaserZones.toArray(), "Zone list; format: name;dim;x1,y1,z1;x2,y2,z2;vertical;offInside"));
 
         accentR        = configuration.getFloat("accentR", CATEGORY_GUI, accentR, 0.0f, 1.0f, "Accent red (original 1.000)");
         accentG        = configuration.getFloat("accentG", CATEGORY_GUI, accentG, 0.0f, 1.0f, "Accent green (original 0.137)");
@@ -120,6 +140,11 @@ public class AbaserConfig {
         putBool (CATEGORY_SAFETY, "noUseInterrupt", noUseInterrupt, "");
         putBool (CATEGORY_SAFETY, "swordOnly",      swordOnly,      "");
         putBool (CATEGORY_SAFETY, "pauseUnfocused", pauseUnfocused, "");
+        putBool (CATEGORY_TARGET, "exceptEnabled", exceptEnabled, "");
+        configuration.get(CATEGORY_TARGET, "exceptList", new String[0], "").set(AbaserTarget.toArray());
+        putBool (CATEGORY_ZONES, "zonesEnabled", zonesEnabled, "");
+        putBool (CATEGORY_ZONES, "zoneOverlay",  zoneOverlay,  "");
+        configuration.get(CATEGORY_ZONES, "zones", new String[0], "").set(AbaserZones.toArray());
         putFloat(CATEGORY_GUI, "accentR",         accentR,         "");
         putFloat(CATEGORY_GUI, "accentG",         accentG,         "");
         putFloat(CATEGORY_GUI, "accentB",         accentB,         "");
@@ -152,6 +177,11 @@ public class AbaserConfig {
         legacyTiming = true;  toggleChatFeedback = true;
         noBowRight = true;    noUseInterrupt = true;
         swordOnly = false;    pauseUnfocused = true;
+        exceptEnabled = true;
+        zonesEnabled = true;  zoneOverlay = true;
+        AbaserTarget.clear();
+        AbaserZones.zones.clear();
+        AbaserZones.selected = 0;
         accentR = 1.000f;     accentG = 0.137f;    accentB = 1.000f;
         otherBackground = true; hudEnabled = true;
     }

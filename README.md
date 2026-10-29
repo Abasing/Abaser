@@ -16,8 +16,8 @@ while armed.
 | Control | Default | Action |
 |---|---|---|
 | Toggle clicker | **F4** | Arms/disarms left + right clicker together (150 ms debounce) |
-| Abaser menu | **INSERT** | Opens the in-game menu (5 tabs, draggable panel) |
-| `/abaser` | — | `on` / `off` / `toggle` / `status`, or bare to open the menu |
+| Abaser menu | **INSERT** | Opens the in-game menu (7 tabs, draggable panel) |
+| `/abaser` | — | `on` / `off` / `toggle` / `status`, `pos1` / `pos2` / `except` / `unexcept`, or bare to open the menu |
 
 Everything is rebindable in vanilla **Options > Controls > Abaser**.
 Preferences persist in `config/abaser.cfg` and autosave whenever the menu
@@ -41,7 +41,7 @@ would hurt you:
 
 | Option | Default | What it does |
 |---|---|---|
-| No bow right-click | **on** | While holding a bow, right clicks are held off — draw and aim normally instead of spam-firing |
+| Bow hold-off | **on** | Holding a bow pauses the clicker entirely — draw and aim normally instead of spam-firing or punching |
 | Sword-only attack | off | Left clicks only fire while you are actually holding a sword |
 | No click while eating | **on** | Right clicks pause while using an item (eating, drinking potions, drawing a bow), so nothing gets interrupted |
 | Pause when unfocused | **on** | No clicks go into an unfocused window — a real player can't either |
@@ -49,6 +49,49 @@ would hurt you:
 In addition, clicking **always stops while any GUI is open** — inventory,
 chest, chat, pause menu, anything. That one is not optional; it is simply
 how a sane mod behaves.
+
+## The except list (Target tab)
+
+Names the clicker must **never target**: while the crosshair is on a
+listed entity, left clicks hold off, and resume the instant it moves
+off. Checked against the client's own ray trace — totally client side,
+nothing is ever asked of the server.
+
+| Entry kind | Example | Matches |
+|---|---|---|
+| Player name | `Notch` | That player, any distance |
+| Custom mob name | `god cow` | A renamed mob with that tag |
+| Entity type | `Cow`, `Zombie` | Every mob of that type |
+| Wildcard | `zombie*` | Zombie, ZombieVillager, ... (`*` = any run of characters) |
+
+Quick ways to fill it: `/abaser except <name>` in chat, or the menu's
+**Add crosshair** button (aim at the offending entity, open the menu,
+click once). The list itself is a plain comma-separated text field.
+
+## Zones (Zones tab)
+
+World regions where the clicker automatically holds off — or only works
+in. A zone is the box between **corner 1** and **corner 2** (order
+doesn't matter, coordinates are block coordinates):
+
+| Dial | Meaning |
+|---|---|
+| **Mode: off inside** | The zone is an exception — the clicker holds off while you are inside it |
+| **Mode: only inside** | The zone is the ONLY place the clicker works — it holds off everywhere else |
+| **Vert** | Y is ignored — the zone becomes the whole column, top to bottom (an except-column or an only-column) |
+
+Corners can be set three ways: stand somewhere and run `/abaser pos1` /
+`/abaser pos2`; type exact coordinates into the menu fields
+(`x, y, z` — or just `x, z`); or walk around with the menu open and hit
+**Here**. While the menu is open the zones draw as wireframe boxes in
+the world (selected zone in the accent color), so you can see exactly
+what you carved out. Zones are dimension-bound — an Overworld zone
+never fires in the Nether. Several zones can coexist; any zone that
+says "hold off" wins, so an *only inside* zone carves the allowed area
+and *off inside* zones subtract from it.
+
+While a zone is holding the clicker off, the HUD says which one:
+`held: spawn (off inside)`.
 
 ## Engine quirks — kept on purpose
 
@@ -113,14 +156,17 @@ Toolchain notes (all verified by actually building this way):
 src/main/java/net/zaminmc/abaser/
 ├── Abaser.java             @Mod entry, config load
 ├── CommonProxy.java        server no-op
-├── ClientProxy.java        client wiring (buses, command)
+├── ClientProxy.java        client wiring (buses, command, renderer)
 ├── AbaserConfig.java       preference persistence (config/abaser.cfg)
 ├── AbaserKeys.java         F4 / INSERT keybinds + debounce
-├── AbaserEngine.java       the engine: timing math, chance rolls, safety gates, clicks
-├── AbaserHud.java          in-game status overlay w/ live CPS
+├── AbaserEngine.java       the engine: timing math, chance rolls, safety/target/zone gates, clicks
+├── AbaserTarget.java       the except list: names never to click at (glob matching)
+├── AbaserZones.java        world zones: corner1/corner2 boxes, off-inside / only-inside, vertical columns
+├── AbaserZoneRenderer.java zone wireframe preview (drawn only while the menu is open)
+├── AbaserHud.java          in-game status overlay w/ live CPS + zone hold notice
 ├── CommandAbaser.java      /abaser chat command
 └── gui/
-    └── AbaserGuiScreen.java  the in-game menu (5 tabs, draggable, sliders)
+    └── AbaserGuiScreen.java  the in-game menu (7 tabs, draggable, sliders, text fields)
 legacy/                     the recovered C++ source this mod grew out of
 .github/workflows/release.yml   the autopublish pipeline
 ```
@@ -131,6 +177,13 @@ The click rhythm and defaults were recovered by reverse-engineering a
 lost standalone tool; its reconstructed source is preserved under
 [`legacy/`](legacy/) so it can never be lost again. Abaser is that
 engine's second life — now living inside the game.
+
+## Client side only
+
+Every gate in the engine is pure client-side knowledge — the open GUI,
+the held item, the crosshair ray trace, the player's own coordinates.
+No server plugin, no server round-trips, no extra packets beyond the
+normal clicks themselves; the mod works identically on a vanilla server.
 
 ## Fair play
 

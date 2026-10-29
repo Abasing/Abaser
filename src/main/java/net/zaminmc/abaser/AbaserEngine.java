@@ -33,9 +33,20 @@ import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
  * Safety gating (see the Safety tab of the menu):
  *  - clicking always stops while any GUI / inventory / chat is open
  *  - optional idle while the window is unfocused
- *  - optional: no right clicks while holding a bow (draw and aim in peace)
+ *  - optional: the whole clicker holds off while holding a bow
+ *    (draw and aim in peace)
  *  - optional: no right clicks while using an item (eat / drink in peace)
  *  - optional: left clicks only while holding a sword
+ *
+ * Target gating (see the Target tab):
+ *  - optional except list: left clicks hold off while the crosshair is
+ *    on a listed name (player, custom-named mob, or entity type, '*'
+ *    wildcard) -- checked against the client's own ray trace
+ *
+ * Zone gating (see the Zones tab):
+ *  - optional world zones: the clicker holds off inside (or outside)
+ *    a box between two corners; vertical zones cover the whole column,
+ *    top to bottom; zones are dimension-bound
  */
 public class AbaserEngine {
 
@@ -81,13 +92,23 @@ public class AbaserEngine {
             return;
         }
 
+        // Zone gating: the player standing inside (or outside) a zone
+        // holds the whole clicker off. Computed once per tick -- it only
+        // changes when you walk.
+        boolean zoneHold = AbaserZones.isSuppressed(mc);
+
         long now = System.nanoTime();
 
         // ---- LEFT branch --------------------------------------------------
         // Original: GetAsyncKeyState(VK_LBUTTON) while left toggle is on.
         if (AbaserConfig.leftEnabled && Mouse.isButtonDown(0)) {
             if (now >= nextLeftNs) {
-                if (canLeftClick(mc) && RNG.nextInt(100) < AbaserConfig.hitChance) {
+                // Except list: holds off while the crosshair is on a listed
+                // name, so the clicker never attacks through a friend.
+                boolean exceptHold = AbaserConfig.exceptEnabled
+                        && AbaserTarget.isCrosshairExcepted(mc);
+                boolean hold = zoneHold || exceptHold;
+                if (!hold && canLeftClick(mc) && RNG.nextInt(100) < AbaserConfig.hitChance) {
                     leftClick(mc);
                     // Block Hit: RMB tap right after the attack
                     // (original: WM_RBUTTONDOWN, 20 ms, WM_RBUTTONUP)
@@ -97,7 +118,10 @@ public class AbaserEngine {
                         rightClick(mc);
                     }
                 }
-                nextLeftNs = now + leftIntervalNs();
+                // While held off we keep the schedule at "now", so the
+                // clicker reacts the instant the hold lifts (crosshair
+                // moved off the friend, player left the zone).
+                nextLeftNs = hold ? now : now + leftIntervalNs();
             }
         } else {
             nextLeftNs = now;
@@ -109,10 +133,10 @@ public class AbaserEngine {
                 // Original quirk: the right branch read hit_chance and never
                 // touched the right-chance slider. Kept in legacy mode only.
                 int chance = AbaserConfig.legacyTiming ? AbaserConfig.hitChance : AbaserConfig.rightChance;
-                if (canRightClick(mc) && RNG.nextInt(100) < chance) {
+                if (!zoneHold && canRightClick(mc) && RNG.nextInt(100) < chance) {
                     rightClick(mc);
                 }
-                nextRightNs = now + rightIntervalNs();
+                nextRightNs = zoneHold ? now : now + rightIntervalNs();
             }
         } else {
             nextRightNs = now;
@@ -121,10 +145,18 @@ public class AbaserEngine {
 
     // ---------------------------------------------------------------- gates
 
-    /** Sword-only mode: only attack while actually holding a sword. */
+    /**
+     * Sword-only mode + bow hold-off: only attack while actually holding
+     * a suitable weapon. Holding a bow pauses the whole clicker (the
+     * right branch has its own guard, but punching with a bow is just
+     * as unwanted as spam-firing one).
+     */
     private static boolean canLeftClick(Minecraft mc) {
-        if (!AbaserConfig.swordOnly) return true;
         ItemStack held = mc.thePlayer.getHeldItem();
+        if (AbaserConfig.noBowRight && held != null && held.getItem() instanceof ItemBow) {
+            return false;
+        }
+        if (!AbaserConfig.swordOnly) return true;
         return held != null && held.getItem() instanceof ItemSword;
     }
 

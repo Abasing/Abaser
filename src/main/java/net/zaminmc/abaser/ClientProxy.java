@@ -16,9 +16,10 @@ public class ClientProxy extends CommonProxy {
     public void init(FMLInitializationEvent event) {
         AbaserKeys.register();
 
-        // Tick + overlay events live on the Forge bus in 1.8.8
+        // Tick + overlay + zone wireframe events live on the Forge bus in 1.8.8
         MinecraftForge.EVENT_BUS.register(new AbaserEngine());
         MinecraftForge.EVENT_BUS.register(new AbaserHud());
+        MinecraftForge.EVENT_BUS.register(new AbaserZoneRenderer());
 
         // Key input + config-changed events live on the FML bus in 1.8.8
         FMLCommonHandler.instance().bus().register(new AbaserKeys());

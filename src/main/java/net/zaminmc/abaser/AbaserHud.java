@@ -44,6 +44,13 @@ public class AbaserHud {
             sb.append("R:off");
         }
         mc.fontRendererObj.drawStringWithShadow(sb.toString(), wx, y, 0xFFD0D0D0);
+
+        // Which zone is holding the clicker off, if any.
+        AbaserZones.Zone z = AbaserZones.suppressingZone(mc);
+        if (z != null) {
+            String hold = "held: " + z.name + " (" + z.modeLabel() + ")";
+            mc.fontRendererObj.drawStringWithShadow(hold, x, y + 11, 0xFF9C9C9C);
+        }
     }
 
     private static String fmt(float v) {
