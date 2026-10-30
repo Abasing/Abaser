@@ -25,7 +25,7 @@ buildscript {
 }
 apply plugin: 'net.minecraftforge.gradle.forge'
 
-version = "2.1-dev.4"
+version = "2.1-dev.5"
 group = "net.zaminmc.abaser"
 archivesBaseName = "Abaser-1.8.8"
 
