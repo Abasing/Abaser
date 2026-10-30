@@ -194,8 +194,7 @@ jobs:
           set -euo pipefail
           V="${{ steps.version.outputs.version }}"
           cmake -S exe -B exe-build \
-            -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
-            -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ \
+            -DCMAKE_TOOLCHAIN_FILE=exe/mingw-toolchain.cmake \
             -DABASER_VERSION="$V"
           cmake --build exe-build --parallel
           ls -la exe-build/AbaserClicker.exe

@@ -47,9 +47,12 @@ if(MSVC)
     set_property(TARGET AbaserClicker PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
     target_compile_options(AbaserClicker PRIVATE /W3)
 else()
-    # MinGW: static-link everything (libgcc, libstdc++, winpthread).
+    # MinGW: static-link everything (libgcc, libstdc++, threads).
+    # -mwindows is normally added by CMake's Windows-GNU platform rules for
+    # WIN32 executables, but pass it explicitly too so the exe can never
+    # ship with a console flash even under a sloppy configure.
     target_compile_options(AbaserClicker PRIVATE -O2 -Wall)
-    target_link_options(AbaserClicker PRIVATE -static -static-libgcc -static-libstdc++)
+    target_link_options(AbaserClicker PRIVATE -mwindows -static -static-libgcc -static-libstdc++)
 endif()
 
 # d3d9: the renderer; dwmapi/gdi32/imm32/user32: the ImGui Win32 backend

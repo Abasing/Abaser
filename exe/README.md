@@ -60,8 +60,7 @@ them, so they are not pretended here.
 cmake -S exe -B build -DABASER_VERSION="2.1-dev.4"
 cmake --build build --config Release          # MSVC
 # or cross-compile from Linux:
-cmake -S exe -B build -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
-                   -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ \
+cmake -S exe -B build -DCMAKE_TOOLCHAIN_FILE=exe/mingw-toolchain.cmake \
                    -DABASER_VERSION="2.1-dev.4" && cmake --build build
 ```
 
