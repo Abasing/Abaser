@@ -193,8 +193,9 @@ jobs:
         run: |
           set -euo pipefail
           V="${{ steps.version.outputs.version }}"
+          # absolute path: CMake 3.31 refuses relative CMAKE_TOOLCHAIN_FILE
           cmake -S exe -B exe-build \
-            -DCMAKE_TOOLCHAIN_FILE=exe/mingw-toolchain.cmake \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/exe/mingw-toolchain.cmake" \
             -DABASER_VERSION="$V"
           cmake --build exe-build --parallel
           ls -la exe-build/AbaserClicker.exe
