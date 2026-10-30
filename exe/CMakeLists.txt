@@ -57,5 +57,7 @@ endif()
 
 # d3d9: the renderer; dwmapi/gdi32/imm32/user32: the ImGui Win32 backend
 # (dwmapi is referenced by ImGui_ImplWin32_EnableAlphaCompositing even if
-# unused -- the backend's own header note says MinGW must link it).
-target_link_libraries(AbaserClicker PRIVATE d3d9 dwmapi gdi32 imm32 user32)
+# unused -- the backend's own header note says MinGW must link it);
+# shell32: Shell_NotifyIcon (system tray); advapi32: the HKCU Run entry
+# for start-with-Windows.
+target_link_libraries(AbaserClicker PRIVATE d3d9 dwmapi gdi32 imm32 user32 shell32 advapi32)

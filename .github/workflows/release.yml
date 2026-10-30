@@ -280,7 +280,7 @@ jobs:
             echo
             echo "### Artifacts"
             echo
-            echo "- \`Abaser-Clicker-$V-win64.exe\` — **the auto-clicker**. Standalone Windows executable (Win32 + Dear ImGui + DX9): run it next to the game, \`F4\` toggles, \`INSERT\` hides. Finds the Minecraft (LWJGL) window and posts clicks to that window only."
+            echo "- \`Abaser-Clicker-$V-win64.exe\` — **the auto-clicker**. Standalone Windows executable (Win32 + Dear ImGui + DX9): run it next to the game, \`F4\` toggles, \`INSERT\`/\`X\` park it in the system tray (right-click the tray icon to arm/disarm, start it with Windows, or exit). Finds the Minecraft (LWJGL) window and posts clicks to that window only."
             echo "- \`Abaser-1.8.8-$V.jar\` — the companion mod shell. Loads silently with Forge 1.8.8; it no longer auto-clicks (that is the exe's job now) and answers \`/abaser\` in chat."
             echo "- \`Abaser-1.8.8-$V-sources.jar\` — matching mod sources."
             echo
@@ -291,7 +291,7 @@ jobs:
             echo
             echo "1. Download \`Abaser-Clicker-$V-win64.exe\` (and check the SHA256 above)."
             echo "2. If SmartScreen warns (unsigned binary): right-click → Properties → **Unblock**, then run it."
-            echo "3. In game, press **F4** to toggle the clicker, **INSERT** to hide the window. Settings persist in \`abaser.ini\` next to the exe."
+            echo "3. In game, press **F4** to toggle the clicker, **INSERT** (or the X button) to park it in the tray — the clickers keep running; right-click the tray icon for the menu (arm/disarm, start with Windows, exit). Settings persist in \`abaser.ini\` next to the exe; \"Start with Windows\" (Settings tab or tray menu) launches it straight into the tray at login."
             echo "4. Optional: drop the mod jar into \`.minecraft/mods\` (Forge \`11.15.0.1655\`) — a silent shell with the \`/abaser\` info command."
           } > notes.md
           echo "--- notes.md (first 40 lines):"

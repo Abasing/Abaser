@@ -24,7 +24,10 @@ no focus games, no misclicks into your browser.
 
 Everything is in the UI: randomized CPS min/max per side, hit chance,
 Block Hit (sword-block taps), accent color, rebindable keys. Settings
-persist in `abaser.ini` next to the exe.
+persist in `abaser.ini` next to the exe. The window parks in the
+**system tray** (X / INSERT / tray-click); the tray menu can arm/disarm
+the clickers, toggle **Start with Windows** (a per-user Run key, launches
+straight into the tray), and exit.
 
 Improvements over the classic external clicker it descends from:
 
@@ -37,6 +40,11 @@ Improvements over the classic external clicker it descends from:
 - **live CPS readout** and lifetime click counters
 - **Configs actually save** — the classic's Configs tab said `NOTHING YET`
 - live Minecraft-window detection status in the UI
+- **system tray** — X/INSERT park it by the clock; the tray tooltip tracks
+  the armed state, its menu arms/disarms, toggles start-with-Windows and
+  exits; a second launch just summons the first
+- **start with Windows** — one checkbox (Settings tab or tray menu) writes
+  a per-user Run entry that launches it straight into the tray
 
 **Deliberately absent:** anything that needs game-internal state — detecting
 open inventories/GUIs, "don't click while holding a bow", "sword only".

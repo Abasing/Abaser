@@ -23,6 +23,35 @@ class, so it works with any LWJGL2-based Minecraft (1.7.x through 1.12.2;
 All three are rebindable in the UI (press the **Bind** button, then a key;
 gives up after 5 s).
 
+## System tray
+
+Abaser lives in the tray like a proper background tool:
+
+- **X** (or **INSERT**, or a left-click on the tray icon) parks the window
+  by the clock — the clickers keep running.
+- The tray tooltip shows the live armed state (`L:ON R:off`).
+- **Right-click the tray icon** for the menu: Show/Hide, arm/disarm the
+  left and right clickers, Start with Windows, and Exit (the real quit —
+  X never kills the app).
+- A one-time balloon tip explains "X = tray, not exit" the first time the
+  window is parked. If Explorer restarts, the icon re-adds itself.
+- The icon (a magenta cursor-arrow, the accent color) is drawn at runtime
+  at the tray's own icon size — no `.ico` file ships, the exe stays one
+  self-contained file, and it stays crisp at any DPI.
+- Launching a second copy doesn't stack a duplicate: the new process just
+  tells the running one to show its window and exits.
+
+## Start with Windows
+
+The **Settings** tab (and the tray menu) have a **Start with Windows**
+checkbox. It writes a plain per-user Run entry
+(`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, no admin rights,
+no service) that launches Abaser with the `/tray` argument — so at login
+it starts **directly in the tray**, window hidden, clickers disarmed until
+you press your toggle key. Unchecking removes the entry again; deleting
+the registry value yourself is detected at the next launch. On Windows
+shutdown/logoff the settings are still saved on the way out.
+
 ## Tabs
 
 - **Clicker** — left/right enable + bind, CPS min/max sliders (randomized
@@ -34,7 +63,7 @@ gives up after 5 s).
 - **Configs** — the classic said NOTHING YET; this one actually saves:
   `abaser.ini` next to the exe, loaded at startup, saved on exit.
 - **Settings** — accent color (the whole theme derives from it), background
-  shade, FPS, hide-window bind.
+  shade, FPS, hide-window bind, Start with Windows.
 
 ## Improvements over the classic
 
@@ -45,6 +74,9 @@ gives up after 5 s).
 - **Live CPS readout + click counters**.
 - **Settings persist** (`abaser.ini`).
 - **Focus gate** — optionally no clicks while the game window is unfocused.
+- **System tray** — X/INSERT park it by the clock; arm/disarm, autostart and
+  Exit from the tray menu; one-instance guard; runtime-drawn icon.
+- **Start with Windows** — per-user Run key, launches straight into the tray.
 - No `imgui.ini` litter, no console flash, no shell-outs on exit.
 
 ## Deliberately absent

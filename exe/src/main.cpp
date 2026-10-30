@@ -23,6 +23,13 @@
 //    * settings actually persist — abaser.ini next to the exe (the
 //      classic's "Configs" tab said NOTHING YET; now it says Save)
 //    * no imgui.ini litter, no console flash, no shell-outs
+//    * system tray — X / INSERT park the window next to the clock while
+//      the clickers keep running; the tray tooltip tracks the armed
+//      state, left-click shows the window again, right-click opens the
+//      menu (arm/disarm both sides, start-with-Windows, Exit)
+//    * start with Windows — a plain per-user Run entry (no admin) that
+//      launches straight into the tray; a second launch just summons the
+//      first instance instead of stacking a duplicate
 //
 //  Deliberately NOT here (an external exe cannot know them): detecting
 //  open inventories/GUIs, held-item checks (bow, sword), anything that
@@ -36,6 +43,7 @@
 #include "abaser_compression.h"
 #include "abaser_assets.h"
 #include <windows.h>
+#include <shellapi.h>             // Shell_NotifyIcon — the tray
 #include <d3d9.h>
 #include <thread>
 #include <atomic>
@@ -52,6 +60,8 @@
 
 #ifdef _MSC_VER
 #pragma comment(lib, "d3d9.lib")
+#pragma comment(lib, "shell32.lib")     // tray icon (MSVC links it by default; explicit for clarity)
+#pragma comment(lib, "advapi32.lib")    // registry Run entry for autostart
 #endif
 
 #ifndef ABASER_VERSION
@@ -241,6 +251,30 @@ static bool   left_enabled     = false;
 static bool   right_enabled    = false;
 static bool   window_hidden    = false;
 static int    g_tab            = 0;
+
+// ---------------------------------------------------------------------------
+// System tray + autostart state.
+// ---------------------------------------------------------------------------
+enum {
+    WM_APP_TRAY    = WM_APP + 1,     // tray callback (classic style: lParam = mouse msg, wParam = icon id)
+    IDM_TRAY_SHOW  = 2001,
+    IDM_TRAY_LEFT  = 2002,
+    IDM_TRAY_RIGHT = 2003,
+    IDM_TRAY_AUTO  = 2004,
+    IDM_TRAY_EXIT  = 2005,
+};
+static const UINT   TRAY_ICON_ID  = 1;
+static const wchar_t RUN_KEY[]    = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+static const wchar_t RUN_VALUE[]  = L"Abaser Clicker";
+
+static HWND   g_trayWnd          = nullptr;  // hidden message sink that owns the tray icon
+static HICON  g_appIcon          = nullptr;  // drawn at runtime — no .ico ships, the exe stays one file
+static UINT   g_msgTaskbarCreated = 0;       // "TaskbarCreated": explorer restarted, re-add the icon
+static UINT   g_msgShowInstance   = 0;       // a second launch asks the first to come back out
+static HANDLE g_singleMutex      = nullptr;  // one-instance guard (tray + autostart invite double launches)
+static bool   g_trayClass        = false;    // tray window class registered
+static bool   start_with_windows = false;    // mirrors the registry Run entry
+static bool   g_balloonShown     = false;    // "still in the tray" hint, once per run
 
 // Slider limits
 static const float CPS_LO = 1.0f,  CPS_HI = 25.0f;
@@ -539,6 +573,256 @@ static bool SaveConfig(const std::string& path)
 }
 
 // ---------------------------------------------------------------------------
+// The tray icon — a magenta cursor-arrow drawn with GDI at the tray's own
+// icon metric, so it stays crisp at any DPI and no .ico file has to ship
+// (the executable remains a single self-contained file).
+// ---------------------------------------------------------------------------
+static HICON CreateAppIcon()
+{
+    const int s = ::GetSystemMetrics(SM_CXSMICON);
+    if (s < 8)
+        return (HICON)::LoadIconW(nullptr, (LPCWSTR)IDI_APPLICATION);
+
+    HDC     screen = ::GetDC(nullptr);
+    HDC     dc     = ::CreateCompatibleDC(screen);
+    BITMAPINFO bi  = {};
+    bi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth       = s;
+    bi.bmiHeader.biHeight      = s;                 // bottom-up, as icons like it
+    bi.bmiHeader.biPlanes      = 1;
+    bi.bmiHeader.biBitCount    = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+
+    uint32_t* px     = nullptr;
+    HBITMAP   color  = ::CreateDIBSection(screen, &bi, DIB_RGB_COLORS, (void**)&px, nullptr, 0);
+    HICON     icon   = nullptr;
+    if (screen && dc && color && px) {
+        HGDIOBJ oldBmp = ::SelectObject(dc, color);
+        // the familiar Windows arrow polygon (9x12 grid), scaled to fit
+        const POINT base[7] = { {0,0},{0,11},{3,8},{5,12},{7,11},{5,7},{9,7} };
+        const float k  = (s - 2.0f) / 12.0f;
+        const float ox = (s - 9.0f * k) / 2.0f;
+        const float oy = (s - 12.0f * k) / 2.0f;
+        POINT pts[7];
+        for (int i = 0; i < 7; i++) {
+            pts[i].x = (LONG)(ox + base[i].x * k);
+            pts[i].y = (LONG)(oy + base[i].y * k);
+        }
+        HBRUSH   brush    = ::CreateSolidBrush(RGB(255, 35, 255));   // the accent
+        HGDIOBJ  oldBrush = ::SelectObject(dc, brush);
+        HGDIOBJ  oldPen   = ::SelectObject(dc, ::GetStockObject(NULL_PEN));
+        ::Polygon(dc, pts, 7);
+        ::SelectObject(dc, oldPen);
+        ::SelectObject(dc, oldBrush);
+        ::DeleteObject(brush);
+        ::SelectObject(dc, oldBmp);
+
+        // GDI leaves the alpha channel at 0: make every drawn pixel fully
+        // opaque and the untouched (black) corners fully transparent.
+        for (int i = 0; i < s * s; i++)
+            px[i] = (px[i] & 0x00FFFFFFu) ? (px[i] | 0xFF000000u) : 0u;
+
+        ICONINFO ii   = {};
+        ii.fIcon      = TRUE;
+        ii.hbmColor   = color;
+        ii.hbmMask    = ::CreateBitmap(s, s, 1, 1, nullptr);
+        icon          = ::CreateIconIndirect(&ii);
+        ::DeleteObject(ii.hbmMask);
+    }
+    if (color)  ::DeleteObject(color);
+    if (dc)     ::DeleteDC(dc);
+    if (screen) ::ReleaseDC(nullptr, screen);
+    return icon ? icon : (HICON)::LoadIconW(nullptr, (LPCWSTR)IDI_APPLICATION);
+}
+
+// ---------------------------------------------------------------------------
+// Tray plumbing. The tooltip carries the live armed state; the balloon
+// explains the X-means-tray behavior exactly once per run.
+// ---------------------------------------------------------------------------
+static void RefreshTrayTip()
+{
+    if (g_trayWnd == nullptr) return;
+    wchar_t ver[32] = {};
+    for (int i = 0; i < 31 && ABASER_VERSION[i]; i++)
+        ver[i] = (wchar_t)(unsigned char)ABASER_VERSION[i];
+    wchar_t tip[128] = {};
+    swprintf(tip, 128, L"Abaser Clicker %s | L:%s R:%s",
+             ver, left_enabled ? L"ON" : L"off", right_enabled ? L"ON" : L"off");
+    NOTIFYICONDATAW nid = {};
+    nid.cbSize = sizeof(nid);
+    nid.hWnd   = g_trayWnd;
+    nid.uID    = TRAY_ICON_ID;
+    nid.uFlags = NIF_TIP;
+    lstrcpynW(nid.szTip, tip, 128);
+    ::Shell_NotifyIconW(NIM_MODIFY, &nid);
+}
+
+static bool TrayAddIcon()
+{
+    if (g_trayWnd == nullptr || g_appIcon == nullptr) return false;
+    NOTIFYICONDATAW nid = {};
+    nid.cbSize           = sizeof(nid);
+    nid.hWnd             = g_trayWnd;
+    nid.uID              = TRAY_ICON_ID;
+    nid.uFlags           = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+    nid.uCallbackMessage = WM_APP_TRAY;
+    nid.hIcon            = g_appIcon;
+    lstrcpynW(nid.szTip, L"Abaser Clicker", 128);
+    if (!::Shell_NotifyIconW(NIM_ADD, &nid)) return false;
+    RefreshTrayTip();
+    return true;
+}
+
+static void TrayRemoveIcon()
+{
+    if (g_trayWnd == nullptr) return;
+    NOTIFYICONDATAW nid = {};
+    nid.cbSize = sizeof(nid);
+    nid.hWnd   = g_trayWnd;
+    nid.uID    = TRAY_ICON_ID;
+    ::Shell_NotifyIconW(NIM_DELETE, &nid);
+}
+
+static void TrayBalloon(const wchar_t* title, const wchar_t* text)
+{
+    if (g_trayWnd == nullptr) return;
+    NOTIFYICONDATAW nid = {};
+    nid.cbSize      = sizeof(nid);
+    nid.hWnd        = g_trayWnd;
+    nid.uID         = TRAY_ICON_ID;
+    nid.uFlags      = NIF_INFO;
+    nid.dwInfoFlags = NIIF_INFO;
+    lstrcpynW(nid.szInfoTitle, title, 64);
+    lstrcpynW(nid.szInfo,      text,  256);
+    ::Shell_NotifyIconW(NIM_MODIFY, &nid);
+}
+
+// ---------------------------------------------------------------------------
+// Start with Windows — a plain per-user Run entry in HKCU (no admin, no
+// service, no scheduled task). The command carries /tray so the autostarted
+// copy launches straight into the tray; unchecking removes the value again.
+// The registry is the source of truth: the checkbox merely mirrors it.
+// ---------------------------------------------------------------------------
+static bool AutostartEnabled()
+{
+    HKEY k = nullptr;
+    if (::RegOpenKeyExW(HKEY_CURRENT_USER, RUN_KEY, 0, KEY_QUERY_VALUE, &k) != ERROR_SUCCESS)
+        return false;
+    const bool on = ::RegQueryValueExW(k, RUN_VALUE, nullptr, nullptr, nullptr, nullptr) == ERROR_SUCCESS;
+    ::RegCloseKey(k);
+    return on;
+}
+
+static bool SetAutostart(bool enable)
+{
+    HKEY k = nullptr;
+    const LSTATUS r = enable
+        ? ::RegCreateKeyExW(HKEY_CURRENT_USER, RUN_KEY, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &k, nullptr)
+        : ::RegOpenKeyExW(HKEY_CURRENT_USER, RUN_KEY, 0, KEY_SET_VALUE, &k);
+    if (r != ERROR_SUCCESS) return false;
+
+    bool ok = false;
+    if (enable) {
+        wchar_t exe[1024] = {};
+        if (::GetModuleFileNameW(nullptr, exe, 1024) > 0) {
+            const std::wstring cmd = std::wstring(L"\"") + exe + L"\" /tray";
+            ok = ::RegSetValueExW(k, RUN_VALUE, 0, REG_SZ,
+                                  (const BYTE*)cmd.c_str(),
+                                  (DWORD)((cmd.size() + 1) * sizeof(wchar_t))) == ERROR_SUCCESS;
+        }
+    } else {
+        const LSTATUS d = ::RegDeleteValueW(k, RUN_VALUE);
+        ok = (d == ERROR_SUCCESS || d == ERROR_FILE_NOT_FOUND);   // gone is gone
+    }
+    ::RegCloseKey(k);
+    return ok;
+}
+
+static bool StartInTray(LPSTR cmdLine)
+{
+    char buf[512] = {};
+    lstrcpynA(buf, cmdLine ? cmdLine : "", 512);
+    CharLowerBuffA(buf, lstrlenA(buf));
+    return strstr(buf, "/tray") != nullptr || strstr(buf, "-tray") != nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// The tray window — a hidden message sink owning the icon, so the icon can
+// survive independently of the (hideable) main window.
+// ---------------------------------------------------------------------------
+static void TrayContextMenu()
+{
+    HMENU m = ::CreatePopupMenu();
+    if (m == nullptr) return;
+    ::AppendMenuW(m, MF_STRING, IDM_TRAY_SHOW,
+                  window_hidden ? L"Show" : L"Hide to tray");
+    ::AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    ::AppendMenuW(m, MF_STRING | (left_enabled  ? MF_CHECKED : 0), IDM_TRAY_LEFT,  L"Left clicker");
+    ::AppendMenuW(m, MF_STRING | (right_enabled ? MF_CHECKED : 0), IDM_TRAY_RIGHT, L"Right clicker");
+    ::AppendMenuW(m, MF_STRING | (start_with_windows ? MF_CHECKED : 0), IDM_TRAY_AUTO, L"Start with Windows");
+    ::AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    ::AppendMenuW(m, MF_STRING, IDM_TRAY_EXIT, L"Exit");
+
+    POINT pt = {};
+    ::GetCursorPos(&pt);
+    ::SetForegroundWindow(g_trayWnd);                 // KB135908: the menu must
+    ::TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, pt.x, pt.y, 0, g_trayWnd, nullptr);
+    ::PostMessageW(g_trayWnd, WM_NULL, 0, 0);         // ...see a message after, to dismiss
+    ::DestroyMenu(m);
+}
+
+static LRESULT CALLBACK TrayWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (g_msgTaskbarCreated != 0 && msg == g_msgTaskbarCreated) {
+        TrayAddIcon();                                // explorer restarted: icon is gone, re-add
+        return 0;
+    }
+    if (g_msgShowInstance != 0 && msg == g_msgShowInstance) {
+        window_hidden = false;                        // a second launch summons us
+        return 0;
+    }
+    if (msg == WM_APP_TRAY) {
+        switch ((UINT)lParam) {
+        case WM_LBUTTONUP:
+        case WM_LBUTTONDBLCLK:
+            window_hidden = !window_hidden;
+            return 0;
+        case WM_RBUTTONUP:
+        case WM_CONTEXTMENU:
+            TrayContextMenu();
+            return 0;
+        }
+        return 0;
+    }
+    if (msg == WM_COMMAND) {
+        switch (LOWORD(wParam)) {
+        case IDM_TRAY_SHOW:  window_hidden = !window_hidden;             break;
+        case IDM_TRAY_LEFT:  left_enabled  = !left_enabled;              break;
+        case IDM_TRAY_RIGHT: right_enabled = !right_enabled;             break;
+        case IDM_TRAY_AUTO:
+            start_with_windows = !start_with_windows;
+            SetAutostart(start_with_windows);
+            break;
+        case IDM_TRAY_EXIT:  ::DestroyWindow(g_hWnd);                    break;
+        }
+        return 0;
+    }
+    return ::DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
+static bool CreateTrayWindow(HINSTANCE hInstance)
+{
+    g_msgTaskbarCreated = ::RegisterWindowMessageW(L"TaskbarCreated");
+    WNDCLASSEXW wc = { sizeof(wc), 0, TrayWndProc, 0, 0, hInstance, nullptr, nullptr,
+                       nullptr, nullptr, L"AbaserTrayWnd", nullptr };
+    if (!::RegisterClassExW(&wc)) return false;
+    g_trayClass = true;
+    g_trayWnd   = ::CreateWindowExW(0, L"AbaserTrayWnd", L"", WS_OVERLAPPED,
+                                    0, 0, 0, 0, nullptr, nullptr, hInstance, nullptr);
+    return g_trayWnd != nullptr;
+}
+
+// ---------------------------------------------------------------------------
 // Device / window plumbing (the standard imgui DX9 example flow).
 // ---------------------------------------------------------------------------
 static bool CreateDeviceD3D(HWND hWnd)
@@ -579,6 +863,15 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if ((wParam & 0xfff0) == SC_SCREENSAVE || (wParam & 0xfff0) == SC_MONITORPOWER)
             return 0;
         break;
+    case WM_CLOSE:
+        // X parks the window in the tray — the clickers keep running and
+        // Exit lives on the tray menu. INSERT does the same via its bind.
+        window_hidden = true;
+        return 0;
+    case WM_ENDSESSION:
+        // shutting down / logging off while parked in the tray: still save
+        if (wParam) SaveConfig(ConfigPath());
+        return 0;
     case WM_DESTROY:
         ::PostQuitMessage(0);
         return 0;
@@ -663,17 +956,39 @@ static void StyleAbaser()
 // ---------------------------------------------------------------------------
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
-    (void)hInstance; (void)hPrevInstance; (void)lpCmdLine; (void)nCmdShow;
+    (void)hPrevInstance; (void)nCmdShow;
     srand((unsigned int)GetTickCount());
+
+    // --- one instance at a time --------------------------------------------
+    // Tray + autostart make a double launch easy (exe double-clicked while
+    // the autostarted copy sits in the tray): the second copy just tells
+    // the first to show its window and exits.
+    g_msgShowInstance = ::RegisterWindowMessageW(L"AbaserClicker_ShowInstance");
+    g_singleMutex     = ::CreateMutexW(nullptr, FALSE, L"Local\\AbaserClicker_SingleInstance");
+    if (g_singleMutex != nullptr && ::GetLastError() == ERROR_ALREADY_EXISTS) {
+        if (g_msgShowInstance != 0)
+            ::PostMessageW(HWND_BROADCAST, g_msgShowInstance, 0, 0);
+        ::CloseHandle(g_singleMutex);
+        g_singleMutex = nullptr;
+        return 0;
+    }
 
     // settings first, so even the window state is what you left it as
     LoadConfig(ConfigPath());
 
+    // launched by the autostart entry ("/tray")? start parked in the tray.
+    // The autostart checkbox mirrors the registry — the Run key is the
+    // source of truth, so manually deleting it is reflected here too.
+    if (StartInTray(lpCmdLine)) window_hidden = true;
+    start_with_windows = AutostartEnabled();
+
     // --- window -----------------------------------------------------------
     // Class and title are both a single space — the app keeps a low profile,
-    // exactly like the classic did.
-    WNDCLASSEXW wc = { sizeof(wc), 0, WndProc, 0, 0, GetModuleHandleW(nullptr), nullptr,
-                       nullptr, nullptr, nullptr, L" ", nullptr };
+    // exactly like the classic did. The class icon is the tray arrow so the
+    // taskbar button matches the tray when the window is out.
+    g_appIcon = CreateAppIcon();
+    WNDCLASSEXW wc = { sizeof(wc), 0, WndProc, 0, 0, GetModuleHandleW(nullptr), g_appIcon,
+                       nullptr, nullptr, nullptr, L" ", g_appIcon };
     ::RegisterClassExW(&wc);
     HWND hwnd = ::CreateWindowExW(0, L" ", L" ",
                                   WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
@@ -685,7 +1000,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         ::UnregisterClassW(L" ", wc.hInstance);
         return 1;
     }
-    ::ShowWindow(hwnd, SW_SHOWDEFAULT);
+    ::ShowWindow(hwnd, window_hidden ? SW_HIDE : SW_SHOWDEFAULT);
     ::UpdateWindow(hwnd);
 
     // --- ImGui + fonts ------------------------------------------------------
@@ -716,10 +1031,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     std::thread clicker(ClickerThread);
     clicker.detach();
 
+    // --- tray ---------------------------------------------------------------
+    // Hidden message sink owning the tray icon. Failure is not fatal — the
+    // app simply runs without a tray icon and X stays a plain close.
+    if (CreateTrayWindow(wc.hInstance))
+        TrayAddIcon();
+
     // --- main loop ------------------------------------------------------------
     MSG msg = {};
     bool running = true;
-    bool last_hidden = !window_hidden;
+    bool last_hidden = window_hidden;
+    bool tip_l = left_enabled, tip_r = right_enabled;   // tooltip change detector
     static char config_status[192] = "settings load at startup and save on exit";
 
     while (running) {
@@ -744,12 +1066,30 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         WatchBindToggle(right_bind, &right_enabled);
         WatchBindToggle(hide_bind,  &window_hidden);
 
-        // Window visibility toggle
+        // Window visibility toggle: INSERT, the X button and the tray icon
+        // all flip the same flag — the clickers never notice.
         if (window_hidden != last_hidden) {
             ::ShowWindow(hwnd, window_hidden ? SW_HIDE : SW_SHOWDEFAULT);
+            if (window_hidden) {
+                if (!g_balloonShown) {
+                    g_balloonShown = true;
+                    TrayBalloon(L"Abaser Clicker",
+                                L"Still running in the tray. Left-click the icon to show it, "
+                                L"right-click for the menu.");
+                }
+            } else {
+                ::SetForegroundWindow(hwnd);
+            }
             last_hidden = window_hidden;
         }
         if (!window_hidden) ::UpdateWindow(hwnd);
+
+        // tray tooltip tracks the armed state (one API call per change)
+        if (tip_l != left_enabled || tip_r != right_enabled) {
+            tip_l = left_enabled;
+            tip_r = right_enabled;
+            RefreshTrayTip();
+        }
 
         // ---- window 1: title shell ----------------------------------------
         ImGui::Begin(VSTR("Abaser Clicker"), nullptr,
@@ -896,6 +1236,25 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                 hide_bind = ScanForNewBind(hide_bind);
             ImGui::SameLine();
             ImGui::TextUnformatted(GetKeyName(hide_bind));
+            ImGui::Separator();
+            {
+                const bool was_on = start_with_windows;
+                ImGui::Checkbox(VSTR("Start with Windows"), &start_with_windows);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Adds a per-user Run entry (HKCU, no admin) that starts\nAbaser hidden in the tray at login. Unchecking removes it.\nAlso available on the tray icon's right-click menu.");
+                if (start_with_windows != was_on) {
+                    if (SetAutostart(start_with_windows))
+                        snprintf(config_status, sizeof(config_status),
+                                 start_with_windows ? "autostart on - starts in the tray at login"
+                                                    : "autostart removed");
+                    else {
+                        start_with_windows = was_on;
+                        snprintf(config_status, sizeof(config_status),
+                                 "autostart change failed (registry write denied?)");
+                    }
+                }
+            }
+            ImGui::TextDisabled("X / INSERT hide to the tray; the tray menu (right-click) has Exit.");
         }
         ImGui::End();
 
@@ -937,13 +1296,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // ---- cleanup -----------------------------------------------------------
     SaveConfig(ConfigPath());             // autosave on exit
 
+    TrayRemoveIcon();                     // take the icon down before its window
+    if (g_trayWnd) {
+        ::DestroyWindow(g_trayWnd);
+        g_trayWnd = nullptr;
+    }
+
     ImGui_ImplDX9_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
 
     if (g_pd3dDevice) { g_pd3dDevice->Release(); g_pd3dDevice = nullptr; }
     if (g_pD3D)       { g_pD3D->Release();       g_pD3D = nullptr; }
+    if (g_appIcon)    { ::DestroyIcon(g_appIcon); g_appIcon = nullptr; }
+    if (g_singleMutex) { ::CloseHandle(g_singleMutex); g_singleMutex = nullptr; }
     ::DestroyWindow(hwnd);
     ::UnregisterClassW(L" ", wc.hInstance);
+    if (g_trayClass)  ::UnregisterClassW(L"AbaserTrayWnd", wc.hInstance);
     return 0;
 }
