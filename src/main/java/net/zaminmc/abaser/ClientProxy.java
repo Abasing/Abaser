@@ -12,7 +12,7 @@ public class ClientProxy extends CommonProxy {
 
     @Override
     public void init(FMLInitializationEvent event) {
-        ClientCommandHandler.instance().registerCommand(new CommandAbaser());
+        ClientCommandHandler.instance.registerCommand(new CommandAbaser());
         Abaser.logger.info("Abaser ready -- the clicker lives in the standalone Abaser Clicker exe");
     }
 }
