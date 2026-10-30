@@ -2,7 +2,7 @@
 {
   "modid": "abaser",
   "name": "Abaser",
-  "description": "A lightweight background auto-clicker for Minecraft 1.8.8, with an in-game menu, safety options and saved preferences.",
+  "description": "Companion mod shell for the standalone Abaser Clicker executable. The mod itself no longer auto-clicks -- run Abaser Clicker next to the game instead.",
   "version": "${version}",
   "mcversion": "${mcversion}",
   "authorList": ["Abasing"],

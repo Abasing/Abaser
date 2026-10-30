@@ -1,192 +1,81 @@
 # Abaser
 
-**Abaser** — a lightweight background auto-clicker for Minecraft **1.8.8**
-(Forge), with an in-game menu, safety options and saved preferences.
+**Abaser** — a Minecraft auto-clicker in the classic style: a **standalone
+Windows executable** that lives next to your game. The repo builds two things
+and releases them together, automatically, on every push to `develop`:
 
-It loads with Forge and runs silently in the background (no terminal, no
-extra windows, nothing in your face) until you press **F4** or **INSERT**.
-Hold your physical mouse button and the engine clicks *for* you, honoring
-hit-chance and randomized CPS — it calls the game's own
-`clickMouse()` / `rightClickMouse()` through reflection, so every click
-runs the real vanilla attack/use code path. A small HUD shows live CPS
-while armed.
+| Deliverable | What it is |
+|---|---|
+| **`Abaser-Clicker-<version>-win64.exe`** | The auto-clicker. Win32 + Dear ImGui + DirectX 9, one file, no runtimes, no install. |
+| `Abaser-1.8.8-<version>.jar` | Companion mod shell — loads silently with Forge, keeps the Abaser name in-game, answers `/abaser`. **It does not click.** |
 
-## Usage
+## Abaser Clicker (the exe)
+
+The clicker finds the Minecraft window (LWJGL — anything from 1.7.x through
+1.12.2; 1.8.8 is the sweet spot) and posts synthetic mouse clicks to **that
+window only**. `PostMessage` cannot click anything else on your desktop —
+no focus games, no misclicks into your browser.
 
 | Control | Default | Action |
 |---|---|---|
-| Toggle clicker | **F4** | Arms/disarms left + right clicker together (150 ms debounce) |
-| Abaser menu | **INSERT** | Opens the in-game menu (7 tabs, draggable panel) |
-| `/abaser` | — | `on` / `off` / `toggle` / `status`, `pos1` / `pos2` / `except` / `unexcept`, or bare to open the menu |
+| Left toggle | **F4** | Arm/disarm the left clicker |
+| Right toggle | **F4** | Arm/disarm the right clicker (same key by default — rebind to split) |
+| Hide window | **INSERT** | Hide/show the Abaser window (clickers keep running) |
 
-Everything is rebindable in vanilla **Options > Controls > Abaser**.
-Preferences persist in `config/abaser.cfg` and autosave whenever the menu
-closes.
+Everything is in the UI: randomized CPS min/max per side, hit chance,
+Block Hit (sword-block taps), accent color, rebindable keys. Settings
+persist in `abaser.ini` next to the exe.
 
-## Clicker settings
+Improvements over the classic external clicker it descends from:
 
-| Setting | Default | Range |
-|---|---|---|
-| Left CPS min / max | 9.6 / 14.0 | 7.5–18 / 10–20 |
-| Right CPS min / max | 13.0 / 20.0 | 7.5–18 / 10–20 |
-| Hit chance | 87 % | 75–100 |
-| Right chance | 80 % | 75–100 |
-| Block Hit | on, 6 % | 1–25 % |
-| Accent color | #FF23FF | RGB sliders |
+- **accurate CPS by default** — the classic's delay math ran everything at
+  ~2× the label value; "Legacy timing" brings that feel back if you miss it
+- **hold-to-click (classic) or always-click** activation
+- optional **focus gate** — no clicks while the game window is unfocused
+- the **right-chance slider is real** (the classic rolled the left chance
+  for both sides)
+- **live CPS readout** and lifetime click counters
+- **Configs actually save** — the classic's Configs tab said `NOTHING YET`
+- live Minecraft-window detection status in the UI
 
-## Safety options
+**Deliberately absent:** anything that needs game-internal state — detecting
+open inventories/GUIs, "don't click while holding a bow", "sword only".
+An external executable cannot see inside the game process, so those features
+are not pretended. (They previously existed in the in-game mod; that mod no
+longer clicks — see below.)
 
-The Safety tab keeps the clicker out of situations where spamming clicks
-would hurt you:
+See `exe/README.md` for the full details.
 
-| Option | Default | What it does |
-|---|---|---|
-| Bow hold-off | **on** | Holding a bow pauses the clicker entirely — draw and aim normally instead of spam-firing or punching |
-| Sword-only attack | off | Left clicks only fire while you are actually holding a sword |
-| No click while eating | **on** | Right clicks pause while using an item (eating, drinking potions, drawing a bow), so nothing gets interrupted |
-| Pause when unfocused | **on** | No clicks go into an unfocused window — a real player can't either |
+## The companion mod (the jar)
 
-In addition, clicking **always stops while any GUI is open** — inventory,
-chest, chat, pause menu, anything. That one is not optional; it is simply
-how a sane mod behaves.
+The 1.8.8 Forge mod in this repository used to contain the auto-clicker.
+It doesn't anymore — the clicking moved to the exe, and the mod is now a
+deliberately featureless shell: it loads with the game, keeps the name
+loadable, and `/abaser` tells you where the clicker went. Install it or
+don't; the exe works either way.
 
-## The except list (Target tab)
-
-Names the clicker must **never target**: while the crosshair is on a
-listed entity, left clicks hold off, and resume the instant it moves
-off. Checked against the client's own ray trace — totally client side,
-nothing is ever asked of the server.
-
-| Entry kind | Example | Matches |
-|---|---|---|
-| Player name | `Notch` | That player, any distance |
-| Custom mob name | `god cow` | A renamed mob with that tag |
-| Entity type | `Cow`, `Zombie` | Every mob of that type |
-| Wildcard | `zombie*` | Zombie, ZombieVillager, ... (`*` = any run of characters) |
-
-Quick ways to fill it: `/abaser except <name>` in chat, or the menu's
-**Add crosshair** button (aim at the offending entity, open the menu,
-click once). The list itself is a plain comma-separated text field.
-
-## Zones (Zones tab)
-
-World regions where the clicker automatically holds off — or only works
-in. A zone is the box between **corner 1** and **corner 2** (order
-doesn't matter, coordinates are block coordinates):
-
-| Dial | Meaning |
-|---|---|
-| **Mode: off inside** | The zone is an exception — the clicker holds off while you are inside it |
-| **Mode: only inside** | The zone is the ONLY place the clicker works — it holds off everywhere else |
-| **Vert** | Y is ignored — the zone becomes the whole column, top to bottom (an except-column or an only-column) |
-
-Corners can be set three ways: stand somewhere and run `/abaser pos1` /
-`/abaser pos2`; type exact coordinates into the menu fields
-(`x, y, z` — or just `x, z`); or walk around with the menu open and hit
-**Here**. While the menu is open the zones draw as wireframe boxes in
-the world (selected zone in the accent color), so you can see exactly
-what you carved out. Zones are dimension-bound — an Overworld zone
-never fires in the Nether. Several zones can coexist; any zone that
-says "hold off" wins, so an *only inside* zone carves the allowed area
-and *off inside* zones subtract from it.
-
-While a zone is holding the clicker off, the HUD says which one:
-`held: spawn (off inside)`.
-
-## Engine quirks — kept on purpose
-
-The click rhythm reproduces the feel of the tool this mod grew out of
-(the recovered source lives under [`legacy/`](legacy/)), quirks included:
-
-1. **Legacy timing** (Misc tab, default ON): the engine sleeps `100/cps`
-   then `(300|400)/cps2` ms per click — real click rate runs ~2x the
-   label. That ~22 CPS rhythm at "10 CPS" is intentional. Turn it off for
-   mathematically-accurate CPS.
-2. **F4 flips left AND right together** — both toggles ride one key.
-3. **Right branch reads hit chance in legacy mode** — the right-chance
-   slider is honored only in accurate mode.
-4. **Block Hit** = right-click tap right after an attack (the 1.8 classic).
-
-## Releases — the autopublish pipeline
-
-Every push to `develop` cuts the next numbered dev build automatically
-(the [`release`](.github/workflows/release.yml) workflow, in the spirit of
-the ZaminTorch pipeline):
-
-- the build number comes from the `abaser-1.8.8-N` tag ledger;
-- the version is stamped into the source and synced back to `develop` as an
-  Abasing-authored `[skip ci]` bump commit **before** building, so the jar
-  always matches the tagged tree;
-- the reobfuscated jar + sources are published as a **prerelease** with
-  auto-generated notes (commits since the previous tag);
-- commits carrying `[skip ci]` postpone the release to the next push;
-- a `Release-Title:` trailer in a commit message (or a manual
-  `workflow_dispatch` run) sets the release title.
-
-`develop` is the working branch — releases are cut from it; merges to
-`main` are done by hand.
-
-## Building from source
-
-Requirements: **JDK 8** — ForgeGradle 2.1's deobfuscation toolchain does
-not run on newer JVMs. The Gradle wrapper (4.10.3) handles the rest.
+## Layout
 
 ```
-./gradlew setupCIWorkspace build     # first run downloads Forge + MCP
+exe/            the standalone clicker (C++: Win32 + Dear ImGui + DX9)
+src/            the companion mod shell (Java: Forge 1.8.8)
+legacy/         the recovered classic clicker this descends from
+                (frozen reference: original source reconstruction + notes)
+.github/        the release pipeline
 ```
 
-The jar lands in `build/libs/Abaser-1.8.8-<version>.jar`. For an IDE run
-config, use `./gradlew setupDecompWorkspace` first, then
-`./gradlew eclipse` / `--continue idea` as usual for ForgeGradle 2 projects.
+## Building
 
-Toolchain notes (all verified by actually building this way):
+Both artifacts build in CI on every push to `develop`:
 
-- ForgeGradle `2.1-SNAPSHOT` (the 2.1.3 line Forge rebuilt in 2021 so 1.8.x
-  modding survives the maven migration);
-- Gradle **4.10.3** — FG 2.1 calls `TaskOutputs.dir(Object)`, which Gradle
-  5 removed; 4.10.3 is the newest Gradle that still has it;
-- MCP mappings `stable_20`, the final stable channel for 1.8.8;
-- no access transformer — the engine reaches `clickMouse` /
-  `rightClickMouse` via reflection with both MCP and SRG names, so the same
-  source works in dev *and* in the reobfuscated production jar.
+- the **exe** cross-compiles with MinGW-w64 (`cmake -S exe -B build && cmake --build build`)
+- the **mod** builds with JDK 8 + Gradle 4.10.3 + ForgeGradle 2.1
 
-## Project layout
+Manual builds: see `exe/README.md` and the header of `build.gradle`.
 
-```
-src/main/java/net/zaminmc/abaser/
-├── Abaser.java             @Mod entry, config load
-├── CommonProxy.java        server no-op
-├── ClientProxy.java        client wiring (buses, command, renderer)
-├── AbaserConfig.java       preference persistence (config/abaser.cfg)
-├── AbaserKeys.java         F4 / INSERT keybinds + debounce
-├── AbaserEngine.java       the engine: timing math, chance rolls, safety/target/zone gates, clicks
-├── AbaserTarget.java       the except list: names never to click at (glob matching)
-├── AbaserZones.java        world zones: corner1/corner2 boxes, off-inside / only-inside, vertical columns
-├── AbaserZoneRenderer.java zone wireframe preview (drawn only while the menu is open)
-├── AbaserHud.java          in-game status overlay w/ live CPS + zone hold notice
-├── CommandAbaser.java      /abaser chat command
-└── gui/
-    └── AbaserGuiScreen.java  the in-game menu (7 tabs, draggable, sliders, text fields)
-legacy/                     the recovered C++ source this mod grew out of
-.github/workflows/release.yml   the autopublish pipeline
-```
+## Notes
 
-## History
-
-The click rhythm and defaults were recovered by reverse-engineering a
-lost standalone tool; its reconstructed source is preserved under
-[`legacy/`](legacy/) so it can never be lost again. Abaser is that
-engine's second life — now living inside the game.
-
-## Client side only
-
-Every gate in the engine is pure client-side knowledge — the open GUI,
-the held item, the crosshair ray trace, the player's own coordinates.
-No server plugin, no server round-trips, no extra packets beyond the
-normal clicks themselves; the mod works identically on a vanilla server.
-
-## Fair play
-
-An auto-clicker is an unfair advantage on most PvP servers — this is a
-personal tool, for your own use (1.8.8 PvP practice, private servers,
-nostalgia). Don't be that guy on servers that forbid it.
+- Windows SmartScreen may warn on first run (unsigned binary): right-click
+  the exe → Properties → **Unblock**, then run.
+- Dear ImGui v1.91.5 is vendored in `exe/third_party/imgui` (MIT license) —
+  no external dependencies.

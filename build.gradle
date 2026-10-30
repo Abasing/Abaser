@@ -1,6 +1,10 @@
 // ============================================================================
-//  Abaser — a Minecraft 1.8.8 Forge auto-clicker mod (see README.md)
+//  Abaser — companion mod shell (see README.md)
 // ----------------------------------------------------------------------------
+//  The auto-clicking lives in the standalone Abaser Clicker executable
+//  (exe/ in this repository); this Gradle project builds the slim companion
+//  mod that keeps the Abaser name loadable in-game.
+//
 //  Toolchain: JDK 8 + Gradle (see gradle/wrapper/gradle-wrapper.properties),
 //  classic ForgeGradle 2.1 (the line Forge rebuilt in 2021 to keep 1.8.x
 //  modding alive after the maven migration).
@@ -21,7 +25,7 @@ buildscript {
 }
 apply plugin: 'net.minecraftforge.gradle.forge'
 
-version = "2.0-dev.3"
+version = "2.1-dev.4"
 group = "net.zaminmc.abaser"
 archivesBaseName = "Abaser-1.8.8"
 
