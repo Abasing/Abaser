@@ -23,7 +23,7 @@ public class Abaser {
 
     public static final String MODID   = "abaser";
     public static final String NAME    = "Abaser";
-    public static final String VERSION = "2.1-dev.5";
+    public static final String VERSION = "2.1-dev.6";
 
     public static Logger logger;
 
