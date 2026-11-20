@@ -2,7 +2,7 @@
 {
   "modid": "abaser",
   "name": "Abaser",
-  "description": "Companion mod shell for the standalone Abaser Clicker executable. The mod itself no longer auto-clicks -- run Abaser Clicker next to the game instead.",
+  "description": "Companion mod for the standalone Abaser Clicker executable. The mod starts the exe in your system tray when a world loads, feeds it live game state (open GUIs, held item) so it holds its clicks in menus and while a bow is drawn, and stops it when the game closes. The mod itself never clicks.",
   "version": "${version}",
   "mcversion": "${mcversion}",
   "authorList": ["Abasing"],

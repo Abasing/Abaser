@@ -8,14 +8,16 @@ import net.minecraftforge.fml.common.event.FMLInitializationEvent;
 import net.minecraftforge.fml.common.event.FMLPreInitializationEvent;
 
 /**
- * Abaser -- companion mod shell for Minecraft 1.8.8.
+ * Abaser -- companion mod for Minecraft 1.8.8.
  *
  * The auto-clicker itself lives in the standalone Abaser Clicker executable
  * (see exe/ in this repository): a normal Windows program that finds the
  * game window and posts synthetic clicks to it, exactly like the classic
- * external clickers. This mod deliberately carries no clicking logic of its
- * own -- it exists so the Abaser name stays loadable in-game and /abaser
- * can tell you where the clicker went.
+ * external clickers. This mod carries no clicking logic of its own -- it
+ * starts the exe (in the system tray) when a server loads, feeds it live
+ * game state over stdin (is a GUI open? is a bow held?) so the exe can hold
+ * its clicks in menus and while a bow is drawn, and stops it when the game
+ * closes.
  */
 @Mod(modid = Abaser.MODID, name = Abaser.NAME,
      version = Abaser.VERSION, acceptedMinecraftVersions = "[1.8.8]")
