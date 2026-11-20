@@ -9,37 +9,32 @@
 //  anything else on your desktop — no focus games, no misclicks into your
 //  browser, no drivers.
 //
-//  Lineage: this is an improved rebuild of the classic external clicker
-//  recovered in legacy/ (same UI bones, same engine idea, same embedded
-//  font pipeline). Improvements over the classic:
+//  This file is now only the PLATFORM: Win32 window + DX9 device, tray,
+//  autostart, single-instance guard, and the clicker engine. Everything you
+//  see on screen lives in src/ui.cpp (the glass UI), shared verbatim with
+//  the headless simulator in sim/ so the two can never drift apart.
 //
-//    * accurate CPS — the number you set is the number you get (the
-//      classic's sloppy delay math made everything run ~2x the label;
-//      "Legacy timing" brings that feel back if you miss it)
-//    * hold-to-click (classic) or always-click activation, per your taste
-//    * optional "only while Minecraft is focused" safety gate
-//    * the right-clicker now honors its own chance slider
-//    * live CPS readout and click counters
-//    * settings actually persist — abaser.ini next to the exe (the
-//      classic's "Configs" tab said NOTHING YET; now it says Save)
-//    * no imgui.ini litter, no console flash, no shell-outs
-//    * system tray — X / INSERT park the window next to the clock while
-//      the clickers keep running; the tray tooltip tracks the armed
-//      state, left-click shows the window again, right-click opens the
-//      menu (arm/disarm both sides, start-with-Windows, Exit)
-//    * start with Windows — a plain per-user Run entry (no admin) that
-//      launches straight into the tray; a second launch just summons the
-//      first instance instead of stacking a duplicate
-//
-//  Deliberately NOT here (an external exe cannot know them): detecting
-//  open inventories/GUIs, held-item checks (bow, sword), anything that
-//  needs game-internal state.
+//  Recent fixes / changes:
+//    * CLICK BUG FIXED: the UI used to layer a 800x800 "DrawList" overlay
+//      window above everything; Dear ImGui hit-testing picked that window
+//      (SkipItems windows are not skipped by the hover search), so NO widget
+//      in any other window was ever hovered — clicks visibly did nothing.
+//      The overlay is gone; the whole UI is one window now.
+//    * Rebinding no longer freezes the UI (the old ScanForNewBind blocked
+//      the message pump for up to 5 s). It is a small non-blocking state
+//      machine across frames now.
+//    * Toggle hotkeys use key-down EDGES (high bit of GetAsyncKeyState) —
+//      the old code treated the unreliable "pressed since last call" bit as
+//      "down", and blocked the UI thread 150 ms per hit.
+//    * New Apple "Liquid Glass" look: one translucent canvas, glass cards,
+//      iOS-style switches / segmented tabs / sliders, all in ui.cpp.
+//    * Dark native title bar + rounded OS corners via DWM where available.
 // ============================================================================
-
 #include "imgui.h"
 #include "imgui_impl_dx9.h"
 #include "imgui_impl_win32.h"
-#include "imgui_internal.h"       // ImGui::GetCurrentWindow() for the accent line
+#include "ui.h"
+#include "ui_state.h"
 #include "abaser_compression.h"
 #include "abaser_assets.h"
 #include <windows.h>
@@ -50,18 +45,16 @@
 #include <mutex>
 #include <deque>
 #include <chrono>
-#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
-#include <fstream>
 #include <vector>
 
 #ifdef _MSC_VER
 #pragma comment(lib, "d3d9.lib")
-#pragma comment(lib, "shell32.lib")     // tray icon (MSVC links it by default; explicit for clarity)
-#pragma comment(lib, "advapi32.lib")    // registry Run entry for autostart
+#pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "advapi32.lib")
 #endif
 
 #ifndef ABASER_VERSION
@@ -69,194 +62,15 @@
 #endif
 
 // ---------------------------------------------------------------------------
-// String obfuscation ("the key is in the source code")
-// ---------------------------------------------------------------------------
-// Every user-visible string is XOR-encrypted at compile time and rebuilt on
-// the stack right before use, so the plaintext never sits in the binary.
-// (The 48-byte key is the classic's own — kept as a little homage.)
-static constexpr uint64_t ABASER_XOR_KEY[6] = {
-    0x8118b5b2183014a7ull, 0x9ab7bae35936a050ull, 0x9ca7d1fc536407d9ull,
-    0x3201677d57919edaull, 0x5e3342ae6df551fbull, 0x190c352f4c1ed6d4ull,
-};
-
-template<size_t N>
-struct AbaserStr {
-    uint64_t data[(N + 7) / 8] {};   // encrypted storage only
-    char     buf[N + 1] {};          // zero-init, filled at runtime
-    constexpr AbaserStr(const char (&s)[N]) {
-        for (size_t q = 0; q < (N + 7) / 8; q++) {
-            uint64_t v = 0;
-            for (int b = 7; b >= 0; b--) {
-                size_t idx = q * 8 + (size_t)b;
-                v = (v << 8) | (uint8_t)(idx < N ? s[idx] : 0);
-            }
-            data[q] = v ^ ABASER_XOR_KEY[q % 6];
-        }
-    }
-    const char* operator()() {
-        for (size_t q = 0; q < (N + 7) / 8; q++) {
-            uint64_t v = data[q] ^ ABASER_XOR_KEY[q % 6];
-            for (int b = 0; b < 8; b++)
-                if (q * 8 + (size_t)b < N)
-                    buf[q * 8 + b] = (char)((v >> (8 * b)) & 0xFF);
-        }
-        buf[N] = 0;
-        return buf;
-    }
-};
-
-#define VSTR(s) ([]() { static AbaserStr<sizeof(s)> _v(s); return _v(); })()
-
-// ---------------------------------------------------------------------------
-// Virtual-key name table (recovered from the classic's .rdata; 103 named
-// keys, everything else maps to "").
-// ---------------------------------------------------------------------------
-static const char* GetKeyName(int vk)
-{
-    switch (vk) {
-        case 5: return "MOUSE4";
-        case 6: return "MOUSE5";
-        case 8: return "BACKSPACE";
-        case 9: return "TAB";
-        case 12: return "CLEAR";
-        case 13: return "ENTER";
-        case 32: return "SPACE";
-        case 33: return "PGUP";
-        case 34: return "PGDOWN";
-        case 35: return "END";
-        case 45: return "INSERT";
-        case 46: return "DELETE";
-        case 48: return "0";
-        case 49: return "1";
-        case 50: return "2";
-        case 51: return "3";
-        case 52: return "4";
-        case 53: return "5";
-        case 54: return "6";
-        case 55: return "7";
-        case 56: return "8";
-        case 57: return "9";
-        case 65: return "A";
-        case 66: return "B";
-        case 67: return "C";
-        case 68: return "D";
-        case 69: return "E";
-        case 70: return "F";
-        case 71: return "G";
-        case 72: return "H";
-        case 73: return "I";
-        case 74: return "J";
-        case 75: return "K";
-        case 76: return "L";
-        case 77: return "M";
-        case 78: return "N";
-        case 79: return "O";
-        case 80: return "P";
-        case 81: return "Q";
-        case 82: return "R";
-        case 83: return "S";
-        case 84: return "T";
-        case 85: return "U";
-        case 86: return "V";
-        case 87: return "W";
-        case 88: return "X";
-        case 89: return "Y";
-        case 90: return "Z";
-        case 96: return "NUM0";
-        case 97: return "NUM1";
-        case 98: return "NUM2";
-        case 99: return "NUM3";
-        case 100: return "NUM4";
-        case 101: return "NUM5";
-        case 102: return "NUM6";
-        case 103: return "NUM7";
-        case 104: return "NUM8";
-        case 105: return "NUM9";
-        case 106: return "MULTIPLY";
-        case 107: return "ADD";
-        case 108: return "SEPARATOR";
-        case 109: return "SUBTRACT";
-        case 110: return "DECIMAL";
-        case 111: return "DIVIDE";
-        case 112: return "F1";
-        case 113: return "F2";
-        case 114: return "F3";
-        case 115: return "F4";
-        case 116: return "F5";
-        case 117: return "F6";
-        case 118: return "F7";
-        case 119: return "F8";
-        case 120: return "F9";
-        case 121: return "F10";
-        case 122: return "F11";
-        case 123: return "F12";
-        case 124: return "F13";
-        case 125: return "F14";
-        case 126: return "F15";
-        case 127: return "F16";
-        case 128: return "F17";
-        case 129: return "F18";
-        case 130: return "F19";
-        case 131: return "F20";
-        case 132: return "F21";
-        case 133: return "F22";
-        case 134: return "F23";
-        case 135: return "F24";
-        case 160: return "LSHIFT";
-        case 161: return "RSHIFT";
-        case 162: return "LCONTROL";
-        case 163: return "RCONTROL";
-        case 164: return "LMENU";
-        case 165: return "RMENU";
-        case 188: return "COMMA";
-        case 189: return "MINUS";
-        case 190: return "PERIOD";
-        case 191: return "SLASH";
-        case 192: return "TILDA";
-        case 219: return "[";
-        case 220: return "|";
-        case 221: return "]";
-        case 222: return "QUOTE";
-        default: return "";
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Settings (defaults recovered from the classic's .data section; the new
-// options default to their safe/improved values).
+// Globals (window / device / tray plumbing)
 // ---------------------------------------------------------------------------
 static LPDIRECT3D9           g_pD3D        = nullptr;
 static LPDIRECT3DDEVICE9     g_pd3dDevice  = nullptr;
 static D3DPRESENT_PARAMETERS g_d3dpp       = {};
 static HWND                  g_hWnd        = nullptr;
 
-static int    left_bind        = 115;      // VK_F4 — both sides on one key, classic default
-static int    right_bind       = 115;      // VK_F4
-static float  left_min_cps     = 9.6f;
-static float  left_max_cps     = 14.0f;
-static float  right_min_cps    = 13.0f;
-static float  right_max_cps    = 20.0f;
-static int    hit_chance       = 87;       // left connect chance, %
-static int    right_chance     = 80;       // right connect chance, % (now actually used — classic quirk fixed)
-static bool   blockhit         = false;
-static int    blockhit_chance  = 6;
-static bool   hold_mode        = true;     // true = click only while you hold the button (classic)
-static bool   require_focus    = true;     // true = no clicks into an unfocused Minecraft window
-static bool   legacy_timing    = false;    // true = reproduce the classic's ~2x CPS math
-static bool   other_background = true;
-static ImVec4 accent           = ImVec4(1.00f, 0.137f, 1.00f, 1.00f);
-static int    hide_bind        = 45;       // VK_INSERT
-
-static bool   left_enabled     = false;
-static bool   right_enabled    = false;
-static bool   window_hidden    = false;
-static int    g_tab            = 0;
-
-// ---------------------------------------------------------------------------
-// System tray + autostart state.
-// ---------------------------------------------------------------------------
 enum {
-    WM_APP_TRAY    = WM_APP + 1,     // tray callback (classic style: lParam = mouse msg, wParam = icon id)
+    WM_APP_TRAY    = WM_APP + 1,
     IDM_TRAY_SHOW  = 2001,
     IDM_TRAY_LEFT  = 2002,
     IDM_TRAY_RIGHT = 2003,
@@ -267,26 +81,17 @@ static const UINT   TRAY_ICON_ID  = 1;
 static const wchar_t RUN_KEY[]    = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 static const wchar_t RUN_VALUE[]  = L"Abaser Clicker";
 
-static HWND   g_trayWnd          = nullptr;  // hidden message sink that owns the tray icon
-static HICON  g_appIcon          = nullptr;  // drawn at runtime — no .ico ships, the exe stays one file
-static UINT   g_msgTaskbarCreated = 0;       // "TaskbarCreated": explorer restarted, re-add the icon
-static UINT   g_msgShowInstance   = 0;       // a second launch asks the first to come back out
-static HANDLE g_singleMutex      = nullptr;  // one-instance guard (tray + autostart invite double launches)
-static bool   g_trayClass        = false;    // tray window class registered
-static bool   start_with_windows = false;    // mirrors the registry Run entry
-static bool   g_balloonShown     = false;    // "still in the tray" hint, once per run
+static HWND   g_trayWnd          = nullptr;
+static HICON  g_appIcon          = nullptr;
+static UINT   g_msgTaskbarCreated = 0;
+static UINT   g_msgShowInstance   = 0;
+static HANDLE g_singleMutex      = nullptr;
+static bool   g_trayClass        = false;
+static bool   start_with_windows = false;
+static bool   g_balloonShown     = false;
 
-// Slider limits
-static const float CPS_LO = 1.0f,  CPS_HI = 25.0f;
-static const int   CHANCE_LO = 1,  CHANCE_HI = 100;
-static const int   BH_LO = 1,      BH_HI = 25;
-
-// ---------------------------------------------------------------------------
-// Live statistics (rolling one-second window per side + lifetime counters).
-// ---------------------------------------------------------------------------
 static std::mutex g_stats_mutex;
 static std::deque<std::chrono::steady_clock::time_point> g_left_times, g_right_times;
-static unsigned long long g_left_total = 0, g_right_total = 0;
 
 static void RecordClick(bool left)
 {
@@ -299,14 +104,14 @@ static void RecordClick(bool left)
     if (left) g_left_total++; else g_right_total++;
 }
 
-static size_t RecentClicks(bool left)
+static float LiveCps(bool left)
 {
     const std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
     std::lock_guard<std::mutex> lock(g_stats_mutex);
     std::deque<std::chrono::steady_clock::time_point>& q = left ? g_left_times : g_right_times;
     while (!q.empty() && now - q.front() > std::chrono::seconds(1))
         q.pop_front();
-    return q.size();
+    return (float)q.size();
 }
 
 // ---------------------------------------------------------------------------
@@ -320,47 +125,44 @@ static void precise_sleep(long long ms)
 }
 
 // ---------------------------------------------------------------------------
-// Key helpers (name-matching so the numpad twin of a bind also counts,
-// exactly like the classic did).
+// Key helpers. Only the HIGH bit of GetAsyncKeyState counts (the key is down
+// right now). The low "pressed since last call" bit made the old toggle
+// watcher fire randomly and double-flip.
 // ---------------------------------------------------------------------------
 static bool IsBindKeyDown(int key)
 {
     if (key < 0 || key > 255) return false;
     const char* myname = GetKeyName(key);
+    if (!myname[0]) return false;
     for (int i = 3; i < 256; i++) {
-        if (!GetAsyncKeyState(i)) continue;
+        if ((GetAsyncKeyState(i) & 0x8000) == 0) continue;
         const char* name = GetKeyName(i);
-        if (name[0] && myname[0] && strcmp(name, myname) == 0)
+        if (name[0] && strcmp(name, myname) == 0)
             return true;
     }
     return false;
 }
 
-// Toggle-watch: called every frame; toggles when the bind goes down, then
-// debounces for 150 ms (classic behavior).
-static void WatchBindToggle(int key, bool* flag)
+// Edge-triggered toggle watch — called every frame, no blocking, no debounce
+// sleep. Fires exactly once per key-down transition.
+static void WatchBindToggle(int key, bool* flag, bool* prev_down)
 {
-    if (IsBindKeyDown(key)) {
+    const bool down = IsBindKeyDown(key);
+    if (down && !*prev_down)
         *flag = !*flag;
-        precise_sleep(150);
-    }
+    *prev_down = down;
 }
 
-// Interactive rebind: scan VK 3..255 for a pressed key with a display name.
-// Improvement over the classic: gives up after 5 s and keeps the current
-// bind instead of freezing the UI forever.
-static int ScanForNewBind(int current)
+// Non-blocking bind capture: report the named key currently held (0 if none).
+// Mouse buttons 1/2 are excluded (scan starts at 3), so clicking "Bind" can
+// never capture itself.
+static int PollBindKeyPlatform(void*)
 {
-    for (int waited = 0; waited < 5000; waited += 1) {
-        for (int k = 3; k < 256; k++) {
-            if (GetAsyncKeyState(k)) {
-                if (GetKeyName(k)[0])
-                    return k;
-            }
-        }
-        precise_sleep(1);
-    }
-    return current;
+    for (int k = 3; k < 256; k++)
+        if (GetAsyncKeyState(k) & 0x8000)
+            if (GetKeyName(k)[0])
+                return k;
+    return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -373,7 +175,7 @@ static int ScanForNewBind(int current)
 // ---------------------------------------------------------------------------
 static void ClickerThread()
 {
-    const float RAND_MAX_F = 32767.0f;    // rand() range, as in the classic
+    const float RAND_MAX_F = 32767.0f;
     for (;;) {
         HWND target = FindWindowA("LWJGL", nullptr);
 
@@ -383,12 +185,11 @@ static void ClickerThread()
 
         // ---- left button ----
         const bool left_go = left_enabled && base_ok
-            && (!hold_mode || GetAsyncKeyState(VK_LBUTTON) != 0);
+            && (!hold_mode || (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0);
         if (left_go) {
             if (rand() % 100 < hit_chance) {
                 PostMessageA(target, WM_LBUTTONDOWN, MK_LBUTTON, 0);
                 if (legacy_timing) {
-                    // classic quirk: 100/cps, not 1000/cps (part of the 2x feel)
                     float cps = left_min_cps + (left_max_cps - left_min_cps) * (rand() / RAND_MAX_F);
                     precise_sleep((long long)(100.0f / cps));
                 } else {
@@ -405,7 +206,6 @@ static void ClickerThread()
                 }
 
                 if (legacy_timing) {
-                    // classic pacing: 300 or 400 "centi-CPS" after the click
                     float cps2 = left_min_cps + (left_max_cps - left_min_cps) * (rand() / RAND_MAX_F);
                     int gap = (cps2 > 14.0f) ? 300 : 400;
                     precise_sleep((long long)(gap / cps2));
@@ -419,10 +219,8 @@ static void ClickerThread()
 
         // ---- right button ----
         const bool right_go = right_enabled && base_ok
-            && (!hold_mode || GetAsyncKeyState(VK_RBUTTON) != 0);
+            && (!hold_mode || (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0);
         if (right_go) {
-            // improvement: the right side now rolls against right_chance
-            // (the classic read hit_chance here — its slider was a placebo)
             if (rand() % 100 < right_chance) {
                 PostMessageA(target, WM_RBUTTONDOWN, MK_RBUTTON, 0);
                 if (legacy_timing) {
@@ -435,9 +233,6 @@ static void ClickerThread()
                 RecordClick(false);
 
                 if (legacy_timing) {
-                    // classic quirk kept: the right-side gap scaled with the
-                    // LEFT max slider. Only in legacy mode; nobody needs two
-                    // copies of a bug.
                     float cps2 = right_min_cps + (right_max_cps - right_min_cps) * (rand() / RAND_MAX_F);
                     int gap = (left_max_cps > 14.0f) ? 300 : 400;
                     precise_sleep((long long)(gap / cps2));
@@ -454,128 +249,22 @@ static void ClickerThread()
 }
 
 // ---------------------------------------------------------------------------
-// Settings persistence — abaser.ini, a plain key=value file next to the exe.
+// Config file path (abaser.ini next to the exe).
 // ---------------------------------------------------------------------------
-static const char* CONFIG_FILE = "abaser.ini";
-
 static std::string ConfigPath()
 {
     char buf[MAX_PATH + 1] = {};
     DWORD n = GetModuleFileNameA(nullptr, buf, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) return CONFIG_FILE;
+    if (n == 0 || n >= MAX_PATH) return "abaser.ini";
     std::string path(buf, (size_t)n);
     const size_t slash = path.find_last_of("\\/");
-    if (slash == std::string::npos) return CONFIG_FILE;
-    return path.substr(0, slash + 1) + CONFIG_FILE;
-}
-
-static std::string TrimStr(const std::string& s)
-{
-    const size_t a = s.find_first_not_of(" \t\r\n");
-    if (a == std::string::npos) return std::string();
-    const size_t b = s.find_last_not_of(" \t\r\n");
-    return s.substr(a, b - a + 1);
-}
-
-static int ClampI(int v, int lo, int hi)   { return v < lo ? lo : (v > hi ? hi : v); }
-static float ClampF(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
-
-static void ResetDefaults()
-{
-    left_bind        = 115;
-    right_bind       = 115;
-    hide_bind        = 45;
-    left_min_cps     = 9.6f;
-    left_max_cps     = 14.0f;
-    right_min_cps    = 13.0f;
-    right_max_cps    = 20.0f;
-    hit_chance       = 87;
-    right_chance     = 80;
-    blockhit         = false;
-    blockhit_chance  = 6;
-    hold_mode        = true;
-    require_focus    = true;
-    legacy_timing    = false;
-    other_background = true;
-    accent           = ImVec4(1.00f, 0.137f, 1.00f, 1.00f);
-    left_enabled     = false;
-    right_enabled    = false;
-}
-
-static void ApplyConfigKey(const std::string& key, const std::string& val)
-{
-    const char* v = val.c_str();
-    if      (key == "left_bind")        left_bind        = ClampI(atoi(v), 0, 255);
-    else if (key == "right_bind")       right_bind       = ClampI(atoi(v), 0, 255);
-    else if (key == "hide_bind")        hide_bind        = ClampI(atoi(v), 0, 255);
-    else if (key == "left_min_cps")     left_min_cps     = ClampF((float)atof(v), CPS_LO, CPS_HI);
-    else if (key == "left_max_cps")     left_max_cps     = ClampF((float)atof(v), CPS_LO, CPS_HI);
-    else if (key == "right_min_cps")    right_min_cps    = ClampF((float)atof(v), CPS_LO, CPS_HI);
-    else if (key == "right_max_cps")    right_max_cps    = ClampF((float)atof(v), CPS_LO, CPS_HI);
-    else if (key == "hit_chance")       hit_chance       = ClampI(atoi(v), CHANCE_LO, CHANCE_HI);
-    else if (key == "right_chance")     right_chance     = ClampI(atoi(v), CHANCE_LO, CHANCE_HI);
-    else if (key == "blockhit")         blockhit         = (val == "true" || val == "1");
-    else if (key == "blockhit_chance")  blockhit_chance  = ClampI(atoi(v), BH_LO, BH_HI);
-    else if (key == "hold_mode")        hold_mode        = (val == "true" || val == "1");
-    else if (key == "require_focus")    require_focus    = (val == "true" || val == "1");
-    else if (key == "legacy_timing")    legacy_timing    = (val == "true" || val == "1");
-    else if (key == "other_background") other_background = (val == "true" || val == "1");
-    else if (key == "left_enabled")     left_enabled     = (val == "true" || val == "1");
-    else if (key == "right_enabled")    right_enabled    = (val == "true" || val == "1");
-    else if (key == "accent") {
-        float r = 1.0f, g = 0.137f, b = 1.0f, a = 1.0f;
-        if (sscanf(v, "%f %f %f %f", &r, &g, &b, &a) == 4)
-            accent = ImVec4(r, g, b, a);
-    }
-}
-
-static bool LoadConfig(const std::string& path)
-{
-    std::ifstream in(path.c_str());
-    if (!in) return false;
-    std::string line;
-    while (std::getline(in, line)) {
-        const size_t eq = line.find('=');
-        if (eq == std::string::npos) continue;
-        const std::string key = TrimStr(line.substr(0, eq));
-        const std::string val = TrimStr(line.substr(eq + 1));
-        if (key.empty() || key[0] == '#') continue;
-        ApplyConfigKey(key, val);
-    }
-    return true;
-}
-
-static bool SaveConfig(const std::string& path)
-{
-    std::ofstream out(path.c_str());
-    if (!out) return false;
-    out << "# Abaser Clicker settings (loaded at startup, saved on exit)\n";
-    out << "left_bind = "        << left_bind        << "\n";
-    out << "right_bind = "       << right_bind       << "\n";
-    out << "hide_bind = "        << hide_bind        << "\n";
-    out << "left_min_cps = "     << left_min_cps     << "\n";
-    out << "left_max_cps = "     << left_max_cps     << "\n";
-    out << "right_min_cps = "    << right_min_cps    << "\n";
-    out << "right_max_cps = "    << right_max_cps    << "\n";
-    out << "hit_chance = "       << hit_chance       << "\n";
-    out << "right_chance = "     << right_chance     << "\n";
-    out << "blockhit = "         << (blockhit ? "true" : "false")        << "\n";
-    out << "blockhit_chance = "  << blockhit_chance  << "\n";
-    out << "hold_mode = "        << (hold_mode ? "true" : "false")       << "\n";
-    out << "require_focus = "    << (require_focus ? "true" : "false")   << "\n";
-    out << "legacy_timing = "    << (legacy_timing ? "true" : "false")   << "\n";
-    out << "other_background = " << (other_background ? "true" : "false") << "\n";
-    out << "left_enabled = "     << (left_enabled ? "true" : "false")    << "\n";
-    out << "right_enabled = "    << (right_enabled ? "true" : "false")   << "\n";
-    out << "accent = " << accent.x << " " << accent.y << " "
-                       << accent.z << " " << accent.w << "\n";
-    return true;
+    if (slash == std::string::npos) return "abaser.ini";
+    return path.substr(0, slash + 1) + "abaser.ini";
 }
 
 // ---------------------------------------------------------------------------
 // The tray icon — a magenta cursor-arrow drawn with GDI at the tray's own
-// icon metric, so it stays crisp at any DPI and no .ico file has to ship
-// (the executable remains a single self-contained file).
+// icon metric, so it stays crisp at any DPI and no .ico file has to ship.
 // ---------------------------------------------------------------------------
 static HICON CreateAppIcon()
 {
@@ -588,7 +277,7 @@ static HICON CreateAppIcon()
     BITMAPINFO bi  = {};
     bi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
     bi.bmiHeader.biWidth       = s;
-    bi.bmiHeader.biHeight      = s;                 // bottom-up, as icons like it
+    bi.bmiHeader.biHeight      = s;
     bi.bmiHeader.biPlanes      = 1;
     bi.bmiHeader.biBitCount    = 32;
     bi.bmiHeader.biCompression = BI_RGB;
@@ -598,7 +287,6 @@ static HICON CreateAppIcon()
     HICON     icon   = nullptr;
     if (screen && dc && color && px) {
         HGDIOBJ oldBmp = ::SelectObject(dc, color);
-        // the familiar Windows arrow polygon (9x12 grid), scaled to fit
         const POINT base[7] = { {0,0},{0,11},{3,8},{5,12},{7,11},{5,7},{9,7} };
         const float k  = (s - 2.0f) / 12.0f;
         const float ox = (s - 9.0f * k) / 2.0f;
@@ -608,7 +296,7 @@ static HICON CreateAppIcon()
             pts[i].x = (LONG)(ox + base[i].x * k);
             pts[i].y = (LONG)(oy + base[i].y * k);
         }
-        HBRUSH   brush    = ::CreateSolidBrush(RGB(255, 35, 255));   // the accent
+        HBRUSH   brush    = ::CreateSolidBrush(RGB(255, 35, 255));
         HGDIOBJ  oldBrush = ::SelectObject(dc, brush);
         HGDIOBJ  oldPen   = ::SelectObject(dc, ::GetStockObject(NULL_PEN));
         ::Polygon(dc, pts, 7);
@@ -617,8 +305,6 @@ static HICON CreateAppIcon()
         ::DeleteObject(brush);
         ::SelectObject(dc, oldBmp);
 
-        // GDI leaves the alpha channel at 0: make every drawn pixel fully
-        // opaque and the untouched (black) corners fully transparent.
         for (int i = 0; i < s * s; i++)
             px[i] = (px[i] & 0x00FFFFFFu) ? (px[i] | 0xFF000000u) : 0u;
 
@@ -636,8 +322,7 @@ static HICON CreateAppIcon()
 }
 
 // ---------------------------------------------------------------------------
-// Tray plumbing. The tooltip carries the live armed state; the balloon
-// explains the X-means-tray behavior exactly once per run.
+// Tray plumbing.
 // ---------------------------------------------------------------------------
 static void RefreshTrayTip()
 {
@@ -698,10 +383,7 @@ static void TrayBalloon(const wchar_t* title, const wchar_t* text)
 }
 
 // ---------------------------------------------------------------------------
-// Start with Windows — a plain per-user Run entry in HKCU (no admin, no
-// service, no scheduled task). The command carries /tray so the autostarted
-// copy launches straight into the tray; unchecking removes the value again.
-// The registry is the source of truth: the checkbox merely mirrors it.
+// Start with Windows — a plain per-user Run entry in HKCU (no admin).
 // ---------------------------------------------------------------------------
 static bool AutostartEnabled()
 {
@@ -732,7 +414,7 @@ static bool SetAutostart(bool enable)
         }
     } else {
         const LSTATUS d = ::RegDeleteValueW(k, RUN_VALUE);
-        ok = (d == ERROR_SUCCESS || d == ERROR_FILE_NOT_FOUND);   // gone is gone
+        ok = (d == ERROR_SUCCESS || d == ERROR_FILE_NOT_FOUND);
     }
     ::RegCloseKey(k);
     return ok;
@@ -747,8 +429,7 @@ static bool StartInTray(LPSTR cmdLine)
 }
 
 // ---------------------------------------------------------------------------
-// The tray window — a hidden message sink owning the icon, so the icon can
-// survive independently of the (hideable) main window.
+// The tray window — hidden message sink owning the icon.
 // ---------------------------------------------------------------------------
 static void TrayContextMenu()
 {
@@ -765,20 +446,20 @@ static void TrayContextMenu()
 
     POINT pt = {};
     ::GetCursorPos(&pt);
-    ::SetForegroundWindow(g_trayWnd);                 // KB135908: the menu must
+    ::SetForegroundWindow(g_trayWnd);
     ::TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, pt.x, pt.y, 0, g_trayWnd, nullptr);
-    ::PostMessageW(g_trayWnd, WM_NULL, 0, 0);         // ...see a message after, to dismiss
+    ::PostMessageW(g_trayWnd, WM_NULL, 0, 0);
     ::DestroyMenu(m);
 }
 
 static LRESULT CALLBACK TrayWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     if (g_msgTaskbarCreated != 0 && msg == g_msgTaskbarCreated) {
-        TrayAddIcon();                                // explorer restarted: icon is gone, re-add
+        TrayAddIcon();
         return 0;
     }
     if (g_msgShowInstance != 0 && msg == g_msgShowInstance) {
-        window_hidden = false;                        // a second launch summons us
+        window_hidden = false;
         return 0;
     }
     if (msg == WM_APP_TRAY) {
@@ -869,7 +550,6 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         window_hidden = true;
         return 0;
     case WM_ENDSESSION:
-        // shutting down / logging off while parked in the tray: still save
         if (wParam) SaveConfig(ConfigPath());
         return 0;
     case WM_DESTROY:
@@ -879,77 +559,32 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     return ::DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 
-// ---------------------------------------------------------------------------
-// Theme (recovered constants: dark gray surfaces, magenta accent).
-// ---------------------------------------------------------------------------
-static void StyleAbaser()
+// Dark title bar + rounded window corners, where the OS offers them.
+// Resolved at runtime so the exe still runs on old Windows untouched.
+static void ApplyWindowDressing(HWND hwnd)
 {
-    ImGuiStyle& style = ImGui::GetStyle();
-    ImVec4* colors = style.Colors;
-
-    style.WindowPadding     = ImVec2(8.0f, 8.0f);
-    style.WindowRounding    = 0.0f;
-    style.FrameRounding     = 4.0f;
-    style.FramePadding      = ImVec2(4.0f, 3.0f);
-    style.ItemSpacing       = ImVec2(8.0f, 4.0f);
-    style.ItemInnerSpacing  = ImVec2(4.0f, 4.0f);
-    style.ScrollbarSize     = 20.0f;
-    style.ScrollbarRounding = 3.0f;
-    style.GrabMinSize       = 8.0f;
-    style.GrabRounding      = 1.0f;
-    style.TabRounding       = 4.0f;
-    style.ButtonTextAlign   = ImVec2(0.5f, 0.5f);
-    style.AntiAliasedLines  = true;
-    style.AntiAliasedFill   = true;
-
-    const ImVec4 bg        = ImVec4(0.094f, 0.094f, 0.094f, 1.00f);
-    const ImVec4 bgHover   = ImVec4(0.194f, 0.194f, 0.194f, 1.10f);
-    const ImVec4 bgActive  = ImVec4(0.244f, 0.244f, 0.244f, 1.10f);
-    const ImVec4 textDim   = ImVec4(0.240f, 0.230f, 0.290f, 1.00f);
-    // accent-derived tones (the classic computed these from the accent)
-    const ImVec4 accentA   = ImVec4(accent.y + 0.10f, accent.x + 0.10f, accent.z, 1.00f);
-    const ImVec4 accentB   = ImVec4(accent.x, accent.y + 0.20f, accent.z, 1.00f);
-
-    colors[ImGuiCol_Text]                 = ImVec4(1.00f, 1.00f, 1.00f, 1.00f);
-    colors[ImGuiCol_TextDisabled]         = textDim;
-    colors[ImGuiCol_WindowBg]             = bg;
-    colors[ImGuiCol_ChildBg]              = ImVec4(0, 0, 0, 0);
-    colors[ImGuiCol_PopupBg]              = ImVec4(0.094f, 0.094f, 0.094f, 1.05f);
-    colors[ImGuiCol_Border]               = ImVec4(0.92f, 0.91f, 0.88f, 0.00f);
-    colors[ImGuiCol_BorderShadow]         = bgHover;
-    colors[ImGuiCol_FrameBg]              = accentB;
-    colors[ImGuiCol_FrameBgHovered]       = accentA;
-    colors[ImGuiCol_FrameBgActive]        = accent;
-    colors[ImGuiCol_TitleBg]              = accent;
-    colors[ImGuiCol_TitleBgActive]        = accent;
-    colors[ImGuiCol_TitleBgCollapsed]     = ImVec4(1.00f, 0.98f, 0.95f, 0.75f);
-    colors[ImGuiCol_MenuBarBg]            = ImVec4(0.094f, 0.094f, 0.094f, 0.20f);
-    colors[ImGuiCol_ScrollbarBg]          = bgActive;
-    colors[ImGuiCol_ScrollbarGrab]        = accentB;
-    colors[ImGuiCol_ScrollbarGrabHovered] = accentA;
-    colors[ImGuiCol_ScrollbarGrabActive]  = accent;
-    colors[ImGuiCol_CheckMark]            = accentA;
-    colors[ImGuiCol_SliderGrab]           = accentA;
-    colors[ImGuiCol_SliderGrabActive]     = accent;
-    colors[ImGuiCol_Button]               = accentB;
-    colors[ImGuiCol_ButtonHovered]        = accentA;
-    colors[ImGuiCol_ButtonActive]         = accent;
-    colors[ImGuiCol_Header]               = accentB;
-    colors[ImGuiCol_HeaderHovered]        = accentA;
-    colors[ImGuiCol_HeaderActive]         = accent;
-    colors[ImGuiCol_Separator]            = accentA;
-    colors[ImGuiCol_SeparatorHovered]     = accentA;
-    colors[ImGuiCol_SeparatorActive]      = accent;
-    colors[ImGuiCol_ResizeGrip]           = accentB;
-    colors[ImGuiCol_ResizeGripHovered]    = accentA;
-    colors[ImGuiCol_ResizeGripActive]     = accent;
-    colors[ImGuiCol_Tab]                  = accentB;
-    colors[ImGuiCol_TabHovered]           = accentA;
-    colors[ImGuiCol_TabActive]            = accent;
-    colors[ImGuiCol_TabUnfocused]         = accentB;
-    colors[ImGuiCol_TabUnfocusedActive]   = accentA;
-    colors[ImGuiCol_NavHighlight]         = ImVec4(0.25f, 1.00f, 0.00f, 0.43f);
+    typedef HRESULT (WINAPI *DwmSetWindowAttributeFn)(HWND, DWORD, LPCVOID, DWORD);
+    HMODULE dwm = ::LoadLibraryW(L"dwmapi.dll");
+    if (dwm == nullptr) return;
+    DwmSetWindowAttributeFn fn =
+        (DwmSetWindowAttributeFn)::GetProcAddress(dwm, "DwmSetWindowAttribute");
+    if (fn != nullptr) {
+        BOOL dark = TRUE;
+        fn(hwnd, 20, &dark, sizeof(dark));              // DWMWA_USE_IMMERSIVE_DARK_MODE
+        fn(hwnd, 19, &dark, sizeof(dark));              // (older build number)
+        DWORD round = 2;                                 // DWMWCP_ROUND
+        fn(hwnd, 33, &round, sizeof(round));            // DWMWA_WINDOW_CORNER_PREFERENCE
+    }
+    ::FreeLibrary(dwm);
 }
+
+// ---------------------------------------------------------------------------
+// UI host — the platform's answer to the few questions ui.cpp asks.
+// ---------------------------------------------------------------------------
+static bool  HostMcFound(void*)           { return FindWindowA("LWJGL", nullptr) != nullptr; }
+static bool  HostAutostartEnabled(void*)  { return AutostartEnabled(); }
+static bool  HostSetAutostart(void*, bool on) { return SetAutostart(on); }
+static const char* HostConfigPath(void*)  { static std::string p = ConfigPath(); return p.c_str(); }
 
 // ---------------------------------------------------------------------------
 // main
@@ -960,9 +595,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     srand((unsigned int)GetTickCount());
 
     // --- one instance at a time --------------------------------------------
-    // Tray + autostart make a double launch easy (exe double-clicked while
-    // the autostarted copy sits in the tray): the second copy just tells
-    // the first to show its window and exits.
     g_msgShowInstance = ::RegisterWindowMessageW(L"AbaserClicker_ShowInstance");
     g_singleMutex     = ::CreateMutexW(nullptr, FALSE, L"Local\\AbaserClicker_SingleInstance");
     if (g_singleMutex != nullptr && ::GetLastError() == ERROR_ALREADY_EXISTS) {
@@ -973,26 +605,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         return 0;
     }
 
-    // settings first, so even the window state is what you left it as
     LoadConfig(ConfigPath());
-
-    // launched by the autostart entry ("/tray")? start parked in the tray.
-    // The autostart checkbox mirrors the registry — the Run key is the
-    // source of truth, so manually deleting it is reflected here too.
     if (StartInTray(lpCmdLine)) window_hidden = true;
     start_with_windows = AutostartEnabled();
 
-    // --- window -----------------------------------------------------------
-    // Class and title are both a single space — the app keeps a low profile,
-    // exactly like the classic did. The class icon is the tray arrow so the
-    // taskbar button matches the tray when the window is out.
+    // --- window: client area exactly the layout the UI was designed for ----
     g_appIcon = CreateAppIcon();
     WNDCLASSEXW wc = { sizeof(wc), 0, WndProc, 0, 0, GetModuleHandleW(nullptr), g_appIcon,
                        nullptr, nullptr, nullptr, L" ", g_appIcon };
     ::RegisterClassExW(&wc);
+
+    RECT wr = { 0, 0, (LONG)lay::CLIENT_W, (LONG)lay::CLIENT_H };
+    ::AdjustWindowRect(&wr, WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE);
+    const int win_w = (int)(wr.right - wr.left);
+    const int win_h = (int)(wr.bottom - wr.top);
     HWND hwnd = ::CreateWindowExW(0, L" ", L" ",
                                   WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-                                  100, 100, 500, 430,
+                                  100, 100, win_w, win_h,
                                   nullptr, nullptr, wc.hInstance, nullptr);
     g_hWnd = hwnd;
     if (!CreateDeviceD3D(hwnd)) {
@@ -1000,40 +629,40 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         ::UnregisterClassW(L" ", wc.hInstance);
         return 1;
     }
+    ApplyWindowDressing(hwnd);
     ::ShowWindow(hwnd, window_hidden ? SW_HIDE : SW_SHOWDEFAULT);
     ::UpdateWindow(hwnd);
 
     // --- ImGui + fonts ------------------------------------------------------
-    // The font rides along in the classic's own "57BC" compressed container
-    // (abaser_assets.h) and is decoded at startup; identical rendering to
-    // the original executable, no library fork.
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    io.IniFilename = nullptr;              // our abaser.ini is the only config file
+    io.IniFilename = nullptr;
 
     static std::vector<uint8_t> ubuntu_ttf;   // must outlive the font atlas
     ImFontConfig font_cfg;
-    font_cfg.FontDataOwnedByAtlas = false;    // ...so the atlas must not free our buffer
+    font_cfg.FontDataOwnedByAtlas = false;
     if (abaser::decode_binary_asset(ABASER_FONT_UBUNTU, sizeof(ABASER_FONT_UBUNTU), ubuntu_ttf)
-        && ubuntu_ttf.size() > 4)
-        io.Fonts->AddFontFromMemoryTTF(ubuntu_ttf.data(), (int)ubuntu_ttf.size(), 18.0f, &font_cfg);
-    else
-        io.Fonts->AddFontDefault();           // fallback if the blob ever fails to decode
+        && ubuntu_ttf.size() > 4) {
+        g_fonts.title = io.Fonts->AddFontFromMemoryTTF(ubuntu_ttf.data(), (int)ubuntu_ttf.size(), 21.0f, &font_cfg);
+        g_fonts.body  = io.Fonts->AddFontFromMemoryTTF(ubuntu_ttf.data(), (int)ubuntu_ttf.size(), 18.0f, &font_cfg);
+        g_fonts.small = io.Fonts->AddFontFromMemoryTTF(ubuntu_ttf.data(), (int)ubuntu_ttf.size(), 13.0f, &font_cfg);
+    } else {
+        g_fonts.title = io.Fonts->AddFontDefault();
+        g_fonts.body  = io.Fonts->AddFontDefault();
+        g_fonts.small = io.Fonts->AddFontDefault();
+    }
 
     // --- backends -----------------------------------------------------------
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX9_Init(g_pd3dDevice);
-    StyleAbaser();
+    StyleAbaserGlass();
 
     // --- clicker thread -----------------------------------------------------
     std::thread clicker(ClickerThread);
     clicker.detach();
 
     // --- tray ---------------------------------------------------------------
-    // Hidden message sink owning the tray icon. Failure is not fatal — the
-    // app simply runs without a tray icon and X stays a plain close.
     if (CreateTrayWindow(wc.hInstance))
         TrayAddIcon();
 
@@ -1041,8 +670,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     MSG msg = {};
     bool running = true;
     bool last_hidden = window_hidden;
-    bool tip_l = left_enabled, tip_r = right_enabled;   // tooltip change detector
-    static char config_status[192] = "settings load at startup and save on exit";
+    bool prev_left_key = false, prev_right_key = false, prev_hide_key = false;
+    bool tip_l = left_enabled, tip_r = right_enabled;
+
+    AbaserUIHost host = {};
+    host.mc_found          = &HostMcFound;
+    host.autostart_enabled = &HostAutostartEnabled;
+    host.set_autostart     = &HostSetAutostart;
+    host.config_path       = &HostConfigPath;
+    host.poll_bind_key     = &PollBindKeyPlatform;
+    host.user              = nullptr;
 
     while (running) {
         if (::PeekMessageW(&msg, nullptr, 0U, 0U, PM_REMOVE)) {
@@ -1061,10 +698,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         ImGui_ImplDX9_NewFrame();
         ImGui::NewFrame();
 
-        // Bind watchers (F4 / F4 / INSERT by default, 150 ms debounce)
-        WatchBindToggle(left_bind,  &left_enabled);
-        WatchBindToggle(right_bind, &right_enabled);
-        WatchBindToggle(hide_bind,  &window_hidden);
+        // Bind watchers (F4 / F4 / INSERT by default, edge-triggered)
+        WatchBindToggle(left_bind,  &left_enabled,  &prev_left_key);
+        WatchBindToggle(right_bind, &right_enabled, &prev_right_key);
+        WatchBindToggle(hide_bind,  &window_hidden, &prev_hide_key);
 
         // Window visibility toggle: INSERT, the X button and the tray icon
         // all flip the same flag — the clickers never notice.
@@ -1082,7 +719,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             }
             last_hidden = window_hidden;
         }
-        if (!window_hidden) ::UpdateWindow(hwnd);
 
         // tray tooltip tracks the armed state (one API call per change)
         if (tip_l != left_enabled || tip_r != right_enabled) {
@@ -1091,187 +727,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             RefreshTrayTip();
         }
 
-        // ---- window 1: title shell ----------------------------------------
-        ImGui::Begin(VSTR("Abaser Clicker"), nullptr,
-                     ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBackground |
-                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav);
-        ImGui::SetWindowSize(ImVec2(500.0f, 0.0f));
-        ImGui::SetWindowPos(ImVec2(0.0f, 0.0f));
-        ImGui::End();
+        host.live_cps_left  = LiveCps(true);
+        host.live_cps_right = LiveCps(false);
 
-        // ---- window 2: side panel (tab buttons + version) ------------------
-        ImGui::Begin(VSTR("SidePanel"), nullptr,
-                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
-                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBackground);
-        ImGui::SetWindowPos(ImVec2(-5.0f, 20.0f));
-        ImGui::SetWindowSize(ImVec2(125.0f, 530.0f));
-        if (ImGui::Button(VSTR("Clicker"),  ImVec2(100.0f, 50.0f)))   g_tab = 0;
-        if (ImGui::Button(VSTR("Misc"),     ImVec2(100.0f, 50.0f)))   g_tab = 1;
-        if (ImGui::Button(VSTR("Configs"),  ImVec2(100.0f, 50.0f)))   g_tab = 2;
-        if (ImGui::Button(VSTR("Settings"), ImVec2(100.0f, 50.0f)))   g_tab = 3;
-        ImGui::TextDisabled("Abaser\n%s", ABASER_VERSION);
-        ImGui::End();
-
-        // ---- window 3: canvas (status strip + tab content) ------------------
-        ImGui::Begin(VSTR("Canvas"), nullptr,
-                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
-                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBackground);
-        ImGui::SetWindowPos(ImVec2(107.0f, 25.0f));
-        ImGui::SetWindowSize(ImVec2(370.0f, 360.0f));
-
-        // shared status strip
-        {
-            const ImVec4 ok   = ImVec4(0.35f, 1.00f, 0.45f, 1.00f);
-            const ImVec4 bad  = ImVec4(1.00f, 0.40f, 0.40f, 1.00f);
-            HWND mc = FindWindowA("LWJGL", nullptr);
-            if (mc != nullptr) ImGui::TextColored(ok, "MC: found");
-            else               ImGui::TextColored(bad, "MC: not found");
-            ImGui::SameLine();
-            if (left_enabled)  ImGui::TextColored(ok, "L: ON");
-            else               ImGui::TextDisabled("L: OFF");
-            ImGui::SameLine();
-            if (right_enabled) ImGui::TextColored(ok, "R: ON");
-            else               ImGui::TextDisabled("R: OFF");
-            ImGui::SameLine();
-            ImGui::TextDisabled("live %.1f / %.1f cps",
-                                (float)RecentClicks(true), (float)RecentClicks(false));
-        }
-        ImGui::Separator();
-
-        if (g_tab == 0) {
-            // keep min below max (integer compare, as in the classic)
-            if ((int)left_min_cps >= (int)left_max_cps)
-                left_min_cps = left_max_cps - 1.0f;
-            if ((int)right_min_cps >= (int)right_max_cps)
-                right_min_cps = right_max_cps - 1.0f;
-
-            ImGui::Checkbox(VSTR("Left Toggle"), &left_enabled);
-            ImGui::SameLine();
-            if (ImGui::Button(VSTR("Left Bind")))
-                left_bind = ScanForNewBind(left_bind);
-            ImGui::SameLine();
-            ImGui::TextUnformatted(GetKeyName(left_bind));
-            ImGui::SliderScalar(VSTR("  "), ImGuiDataType_Float, &left_max_cps,
-                                &CPS_LO, &CPS_HI, VSTR("%.1f LCPS"));
-            ImGui::SliderScalar(VSTR("   "), ImGuiDataType_Float, &left_min_cps,
-                                &CPS_LO, &CPS_HI, VSTR("%.1f LCPS"));
-            ImGui::SliderScalar(VSTR("    "), ImGuiDataType_S32, &hit_chance,
-                                &CHANCE_LO, &CHANCE_HI, "%d Chance");
-            ImGui::Separator();
-
-            ImGui::Checkbox(VSTR("Right Toggle"), &right_enabled);
-            ImGui::SameLine();
-            if (ImGui::Button(VSTR("Right Bind")))
-                right_bind = ScanForNewBind(right_bind);
-            ImGui::SameLine();
-            ImGui::TextUnformatted(GetKeyName(right_bind));
-            ImGui::SliderScalar(VSTR("     "), ImGuiDataType_Float, &right_max_cps,
-                                &CPS_LO, &CPS_HI, VSTR("%.1f RCPS"));
-            ImGui::SliderScalar(VSTR("      "), ImGuiDataType_Float, &right_min_cps,
-                                &CPS_LO, &CPS_HI, VSTR("%.1f RCPS"));
-            ImGui::SliderScalar(VSTR("       "), ImGuiDataType_S32, &right_chance,
-                                &CHANCE_LO, &CHANCE_HI, "%d Chance");
-            ImGui::Separator();
-
-            ImGui::Checkbox(VSTR("Hold to click (classic)"), &hold_mode);
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Click only while you physically hold the button\n(the classic behavior). Uncheck to click nonstop\nwhile the toggle is on.");
-            ImGui::Checkbox(VSTR("Only click while Minecraft is focused"), &require_focus);
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("No clicks go into an unfocused game window.\nUncheck to keep clicking while Minecraft sits\nin the background.");
-            ImGui::Checkbox(VSTR("Legacy timing (classic 2x feel)"), &legacy_timing);
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Accurate by default: the CPS you set is the CPS\nyou get. Legacy reproduces the classic's sloppy\nmath (~2x the label value).");
-        }
-        else if (g_tab == 1) {
-            ImGui::Checkbox(VSTR("Block Hit"), &blockhit);
-            ImGui::SameLine();
-            ImGui::TextUnformatted(VSTR("Note: This is only for Left Click"));
-            ImGui::SliderScalar(VSTR("        "), ImGuiDataType_S32, &blockhit_chance,
-                                &BH_LO, &BH_HI, "%d Chance");
-            ImGui::Separator();
-            ImGui::TextDisabled("Total clicks: L %lu / R %lu",
-                                (unsigned long)g_left_total, (unsigned long)g_right_total);
-            if (ImGui::Button(VSTR("Reset counters"))) {
-                g_left_total = 0;
-                g_right_total = 0;
-            }
-        }
-        else if (g_tab == 2) {
-            ImGui::TextUnformatted(VSTR("Settings persist in abaser.ini next to the executable."));
-            if (ImGui::Button(VSTR("Save now"))) {
-                if (SaveConfig(ConfigPath()))
-                    snprintf(config_status, sizeof(config_status), "saved to %s", ConfigPath().c_str());
-                else
-                    snprintf(config_status, sizeof(config_status), "save failed (read-only folder?)");
-            }
-            ImGui::SameLine();
-            if (ImGui::Button(VSTR("Reload"))) {
-                if (LoadConfig(ConfigPath()))
-                    snprintf(config_status, sizeof(config_status), "reloaded from disk");
-                else
-                    snprintf(config_status, sizeof(config_status), "no abaser.ini yet");
-            }
-            ImGui::SameLine();
-            if (ImGui::Button(VSTR("Reset defaults"))) {
-                ResetDefaults();
-                snprintf(config_status, sizeof(config_status), "defaults restored (not saved yet)");
-            }
-            ImGui::Separator();
-            ImGui::TextWrapped("%s", config_status);
-        }
-        else if (g_tab == 3) {
-            ImGui::ColorEdit4(VSTR("                       "), (float*)&accent,
-                              ImGuiColorEditFlags_NoPicker | ImGuiColorEditFlags_NoSidePreview |
-                              ImGuiColorEditFlags_NoBorder);
-            ImGui::Checkbox("Other Background", &other_background);
-            ImGui::Text(VSTR("Application average %.3f ms/frame (%.1f FPS)"),
-                        1000.0f / io.Framerate, io.Framerate);
-            ImGui::TextUnformatted(VSTR("Hide Window: "));
-            ImGui::SameLine();
-            if (ImGui::Button(VSTR("Bind")))
-                hide_bind = ScanForNewBind(hide_bind);
-            ImGui::SameLine();
-            ImGui::TextUnformatted(GetKeyName(hide_bind));
-            ImGui::Separator();
-            {
-                const bool was_on = start_with_windows;
-                ImGui::Checkbox(VSTR("Start with Windows"), &start_with_windows);
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Adds a per-user Run entry (HKCU, no admin) that starts\nAbaser hidden in the tray at login. Unchecking removes it.\nAlso available on the tray icon's right-click menu.");
-                if (start_with_windows != was_on) {
-                    if (SetAutostart(start_with_windows))
-                        snprintf(config_status, sizeof(config_status),
-                                 start_with_windows ? "autostart on - starts in the tray at login"
-                                                    : "autostart removed");
-                    else {
-                        start_with_windows = was_on;
-                        snprintf(config_status, sizeof(config_status),
-                                 "autostart change failed (registry write denied?)");
-                    }
-                }
-            }
-            ImGui::TextDisabled("X / INSERT hide to the tray; the tray menu (right-click) has Exit.");
-        }
-        ImGui::End();
-
-        // ---- window 4: drawlist overlay (sidebar separator line) -----------
-        ImGui::Begin(VSTR("DrawList"), nullptr,
-                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse |
-                     ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings |
-                     ImGuiWindowFlags_NoNav);
-        ImGui::SetWindowPos(ImVec2(0.0f, 0.0f));
-        ImGui::SetWindowSize(ImVec2(800.0f, 800.0f));
-        ImGui::GetCurrentWindow()->SkipItems = true;   // pure-drawing surface
-        ImGui::GetCurrentWindow()->DrawList->AddLine(
-            ImVec2(107.0f, 0.0f), ImVec2(107.0f, 400.0f),
-            ImGui::GetColorU32(ImVec4(accent.x, accent.y, accent.z, accent.w * ImGui::GetStyle().Alpha)),
-            3.0f);
-        ImGui::End();
+        DrawUI(host, ABASER_VERSION);
 
         // ---- finish frame + present -----------------------------------------
         ImGui::EndFrame();
@@ -1280,8 +739,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         g_pd3dDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
         g_pd3dDevice->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
 
-        D3DCOLOR bg = other_background ? 0xFF0C161C   // "Other Background" checked
-                                       : 0xFF1B1616;  // default
+        D3DCOLOR bg = 0xFF0C111A;
         g_pd3dDevice->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, bg, 1.0f, 0);
         if (g_pd3dDevice->BeginScene() >= 0) {
             ImGui::Render();
@@ -1294,9 +752,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     }
 
     // ---- cleanup -----------------------------------------------------------
-    SaveConfig(ConfigPath());             // autosave on exit
+    SaveConfig(ConfigPath());
 
-    TrayRemoveIcon();                     // take the icon down before its window
+    TrayRemoveIcon();
     if (g_trayWnd) {
         ::DestroyWindow(g_trayWnd);
         g_trayWnd = nullptr;

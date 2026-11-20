@@ -1,0 +1,339 @@
+// ============================================================================
+//  sim_main.cpp — headless UI simulator & functional test harness
+// ----------------------------------------------------------------------------
+//  Compiles the REAL ui.cpp (the exact code the Windows exe draws) without
+//  any Win32/DX9 dependency, feeds it synthetic input events, rasterizes the
+//  draw data with the software rasterizer (sim_raster.h) and saves BMP
+//  screenshots. Because the UI layer is shared verbatim, a click that works
+//  here works in the exe — this is how the "clicks do nothing" bug was
+//  reproduced and how its fix is regression-tested.
+//
+//  Usage:  ./sim <output_dir>
+//  Prints PASS/FAIL per test, exits non-zero if any test fails.
+// ============================================================================
+#include "imgui.h"
+#include "../src/ui.h"
+#include "../src/ui_state.h"
+#include "../src/abaser_compression.h"
+#include "../src/abaser_assets.h"
+#include "sim_raster.h"
+#include <vector>
+#include <cstdio>
+#include <cstring>
+#include <cstdlib>
+#include <string>
+#include <cmath>
+
+// ---------------------------------------------------------------------------
+// BMP writer (24bpp, bottom-up) — no external deps
+// ---------------------------------------------------------------------------
+static void SaveBMP(const SimFB& fb, const std::string& path)
+{
+    FILE* f = fopen(path.c_str(), "wb");
+    if (!f) { fprintf(stderr, "cannot open %s\n", path.c_str()); return; }
+    const int w = fb.w, h = fb.h;
+    const int rowBytes = (w * 3 + 3) & ~3;
+    const int dataSize = rowBytes * h;
+    const int fileSize = 14 + 40 + dataSize;
+
+    uint8_t hdr[14] = {};
+    hdr[0] = 'B'; hdr[1] = 'M';
+    *(uint32_t*)&hdr[2] = (uint32_t)fileSize;
+    *(uint32_t*)&hdr[10] = (uint32_t)(14 + 40);
+    fwrite(hdr, 1, 14, f);
+
+    uint8_t dib[40] = {};
+    *(uint32_t*)&dib[0] = (uint32_t)40;
+    *(int32_t*)&dib[4] = (int32_t)w;
+    *(int32_t*)&dib[8] = (int32_t)h;
+    *(uint16_t*)&dib[12] = 1;
+    *(uint16_t*)&dib[14] = 24;
+    *(uint32_t*)&dib[20] = (uint32_t)dataSize;
+    fwrite(dib, 1, 40, f);
+
+    std::vector<uint8_t> row((size_t)rowBytes, 0);
+    for (int y = h - 1; y >= 0; y--) {
+        for (int x = 0; x < w; x++) {
+            const uint32_t c = fb.px[(size_t)y * (size_t)w + (size_t)x];
+            row[x * 3 + 0] = (uint8_t)((c >> IM_COL32_B_SHIFT) & 0xFFu);
+            row[x * 3 + 1] = (uint8_t)((c >> IM_COL32_G_SHIFT) & 0xFFu);
+            row[x * 3 + 2] = (uint8_t)((c >> IM_COL32_R_SHIFT) & 0xFFu);
+        }
+        fwrite(row.data(), 1, (size_t)rowBytes, f);
+    }
+    fclose(f);
+}
+
+// ---------------------------------------------------------------------------
+// Fake platform host (scripted)
+// ---------------------------------------------------------------------------
+static bool  g_sim_mc_found  = true;
+static bool  g_sim_autostart = false;
+static int   g_sim_bind_key  = 0;      // what PollBindKey reports this frame
+static float g_sim_cps_l = 0.0f, g_sim_cps_r = 0.0f;
+
+static bool  SimMcFound(void*)            { return g_sim_mc_found; }
+static bool  SimAutostart(void*)          { return g_sim_autostart; }
+static bool  SimSetAutostart(void*, bool on) { g_sim_autostart = on; return true; }
+static const char* SimConfigPath(void*)   { return "/tmp/abaser_sim.ini"; }
+static int   SimPollBindKey(void*)        { return g_sim_bind_key; }
+
+// ---------------------------------------------------------------------------
+// Test plumbing
+// ---------------------------------------------------------------------------
+static int g_failures = 0;
+static void Check(bool ok, const char* what)
+{
+    printf("%-4s %s\n", ok ? "PASS" : "FAIL", what);
+    if (!ok) g_failures++;
+}
+
+static SimFB        g_fb;
+static ImFont*      g_font_title = nullptr, *g_font_body = nullptr, *g_font_small = nullptr;
+static AbaserUIHost g_host;
+static const char*  g_version = "1.8.8-sim";
+
+static void RunFrames(int n, const char* shot = nullptr)
+{
+    ImGuiIO& io = ImGui::GetIO();
+    for (int i = 0; i < n; i++) {
+        io.DisplaySize = ImVec2(lay::CLIENT_W, lay::CLIENT_H);
+        io.DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        DrawUI(g_host, g_version);
+        ImGui::Render();
+        SimRenderDrawData(ImGui::GetDrawData(), g_fb,
+                          (const uint32_t*)ImGui::GetIO().Fonts->TexPixelsRGBA32,
+                          ImGui::GetIO().Fonts->TexWidth, ImGui::GetIO().Fonts->TexHeight);
+    }
+    if (shot) SaveBMP(g_fb, std::string(shot));
+}
+
+static void MouseMove(float x, float y) { ImGui::GetIO().AddMousePosEvent(x, y); }
+static void MouseDown(int b = 0)        { ImGui::GetIO().AddMouseButtonEvent(b, true); }
+static void MouseUp(int b = 0)          { ImGui::GetIO().AddMouseButtonEvent(b, false); }
+
+static void ClickAt(float x, float y, int settle_frames = 4)
+{
+    MouseMove(x, y);
+    RunFrames(2);
+    MouseDown();
+    RunFrames(2);
+    MouseUp();
+    RunFrames(settle_frames);
+}
+
+static void DragFromTo(float x0, float y0, float x1, float y1)
+{
+    MouseMove(x0, y0);
+    RunFrames(2);
+    MouseDown();
+    RunFrames(2);
+    const int steps = 10;
+    for (int s = 1; s <= steps; s++) {
+        MouseMove(x0 + (x1 - x0) * (float)s / (float)steps,
+                  y0 + (y1 - y0) * (float)s / (float)steps);
+        RunFrames(1);
+    }
+    MouseUp();
+    RunFrames(3);
+}
+
+static ImVec2 Center(const ImRect& r) { return r.GetCenter(); }
+
+int main(int argc, char** argv)
+{
+    const std::string outdir = argc > 1 ? argv[1] : ".";
+    const std::string dir = outdir.back() == '/' ? outdir : outdir + "/";
+
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+
+    // fonts — same TTF, same sizes as the exe
+    static std::vector<uint8_t> ttf;
+    ImFontConfig fc;
+    fc.FontDataOwnedByAtlas = false;
+    if (abaser::decode_binary_asset(ABASER_FONT_UBUNTU, sizeof(ABASER_FONT_UBUNTU), ttf) && ttf.size() > 4) {
+        g_font_title = io.Fonts->AddFontFromMemoryTTF(ttf.data(), (int)ttf.size(), 21.0f, &fc);
+        g_font_body  = io.Fonts->AddFontFromMemoryTTF(ttf.data(), (int)ttf.size(), 18.0f, &fc);
+        g_font_small = io.Fonts->AddFontFromMemoryTTF(ttf.data(), (int)ttf.size(), 13.0f, &fc);
+    } else {
+        g_font_title = io.Fonts->AddFontDefault();
+        g_font_body  = io.Fonts->AddFontDefault();
+        g_font_small = io.Fonts->AddFontDefault();
+    }
+    g_fonts.title = g_font_title;
+    g_fonts.body  = g_font_body;
+    g_fonts.small = g_font_small;
+
+    unsigned char* tex_px = nullptr;
+    int tw = 0, th = 0;
+    io.Fonts->GetTexDataAsRGBA32(&tex_px, &tw, &th);
+
+    g_fb.w = (int)lay::CLIENT_W;
+    g_fb.h = (int)lay::CLIENT_H;
+    g_fb.px.assign((size_t)g_fb.w * (size_t)g_fb.h, 0xFF000000u);
+
+    g_host.mc_found          = &SimMcFound;
+    g_host.autostart_enabled = &SimAutostart;
+    g_host.set_autostart     = &SimSetAutostart;
+    g_host.config_path       = &SimConfigPath;
+    g_host.poll_bind_key     = &SimPollBindKey;
+    g_host.user              = nullptr;
+
+    // ------------------------------------------------------------------
+    // WARM-UP + FIRST SCREENSHOT (Clicker tab, default state)
+    // ------------------------------------------------------------------
+    RunFrames(5, (dir + "01_clicker_default.bmp").c_str());
+
+    // ------------------------------------------------------------------
+    // THE CLICK BUG, regression-tested:
+    // every one of these used to land on the 800x800 SkipItems overlay
+    // window and do nothing. Now they must all work.
+    // ------------------------------------------------------------------
+    const ImRect lsw = lay::SwitchIn(lay::SideToggle(lay::LeftCard()));
+    ClickAt(Center(lsw).x, Center(lsw).y);
+    Check(left_enabled == true, "click left toggle -> left clicker arms");
+
+    const ImRect rsw = lay::SwitchIn(lay::SideToggle(lay::RightCard()));
+    ClickAt(Center(rsw).x, Center(rsw).y);
+    Check(right_enabled == true, "click right toggle -> right clicker arms");
+
+    // segmented tabs
+    const ImRect seg1 = lay::SegSeg(1);
+    ClickAt(Center(seg1).x, Center(seg1).y);
+    Check(g_tab == 1, "click Misc tab -> tab switches");
+    RunFrames(2, (dir + "02_misc.bmp").c_str());
+
+    const ImRect seg2 = lay::SegSeg(2);
+    ClickAt(Center(seg2).x, Center(seg2).y);
+    Check(g_tab == 2, "click Configs tab -> tab switches");
+    RunFrames(2, (dir + "03_configs.bmp").c_str());
+
+    const ImRect seg3 = lay::SegSeg(3);
+    ClickAt(Center(seg3).x, Center(seg3).y);
+    Check(g_tab == 3, "click Settings tab -> tab switches");
+    RunFrames(2, (dir + "04_settings.bmp").c_str());
+
+    const ImRect seg0 = lay::SegSeg(0);
+    ClickAt(Center(seg0).x, Center(seg0).y);
+    Check(g_tab == 0, "click Clicker tab -> back to tab 0");
+
+    // back on Clicker tab: toggle off again (flip back check)
+    ClickAt(Center(lsw).x, Center(lsw).y);
+    Check(left_enabled == false, "click left toggle again -> disarms");
+
+    // ------------------------------------------------------------------
+    // SLIDER DRAG (left CPS max)
+    // ------------------------------------------------------------------
+    const ImRect sl0 = lay::SideSlider(lay::LeftCard(), 0);
+    const float fy = sl0.Min.y + 24.0f;                 // inside the grab strip
+    const float left_before = left_max_cps;
+    DragFromTo(sl0.Min.x + 30.0f, fy, sl0.Max.x - 6.0f, fy);
+    Check(left_max_cps > left_before, "drag CPS max slider -> value increases");
+
+    // mid-drag screenshot for visual QA
+    MouseMove(sl0.Min.x + 30.0f, fy);
+    RunFrames(2);
+    MouseDown();
+    RunFrames(1);
+    MouseMove(sl0.Min.x + (sl0.Max.x - sl0.Min.x) * 0.72f, fy);
+    RunFrames(2, (dir + "05_slider_drag.bmp").c_str());
+    MouseUp();
+    RunFrames(3);
+
+    // int slider (left chance)
+    const ImRect sl2 = lay::SideSlider(lay::LeftCard(), 2);
+    const int chance_before = hit_chance;
+    DragFromTo(sl2.Min.x + (sl2.Max.x - sl2.Min.x) * 0.8f, sl2.Min.y + 24.0f, sl2.Min.x + 8.0f, sl2.Min.y + 24.0f);
+    Check(hit_chance < chance_before, "drag Chance slider left -> value decreases");
+
+    // ------------------------------------------------------------------
+    // ACTIVATION TOGGLES
+    // ------------------------------------------------------------------
+    const ImRect act0 = lay::SwitchIn(lay::ActToggle(lay::ActivationCard(), 0));
+    ClickAt(Center(act0).x, Center(act0).y);
+    Check(hold_mode == false, "click Hold-to-click switch -> flips off");
+
+    const ImRect act2 = lay::SwitchIn(lay::ActToggle(lay::ActivationCard(), 2));
+    ClickAt(Center(act2).x, Center(act2).y);
+    Check(legacy_timing == true, "click Legacy timing switch -> flips on");
+
+    // hover screenshot on an activation toggle (tooltip appears)
+    MouseMove(Center(lay::SwitchIn(lay::ActToggle(lay::ActivationCard(), 1))).x,
+              Center(lay::SwitchIn(lay::ActToggle(lay::ActivationCard(), 1))).y);
+    RunFrames(25, (dir + "06_hover_tooltip.bmp").c_str());
+
+    // ------------------------------------------------------------------
+    // NON-BLOCKING BIND CAPTURE
+    // ------------------------------------------------------------------
+    const ImRect pillL = lay::PillIn(lay::SideBind(lay::LeftCard()));
+    ClickAt(Center(pillL).x, Center(pillL).y);
+    Check(g_bind_capture == BIND_LEFT, "click bind pill -> capture starts");
+    RunFrames(2, (dir + "07_bind_capture.bmp").c_str());
+    RunFrames(2);                       // a clean "no key" frame (arms capture)
+    g_sim_bind_key = 70;                // 'F' held
+    RunFrames(2);
+    Check(left_bind == 70, "press F while capturing -> bind becomes F");
+    g_sim_bind_key = 0;
+    RunFrames(2, (dir + "08_bind_set.bmp").c_str());
+
+    // cancel capture by clicking the pill again
+    ClickAt(Center(pillL).x, Center(pillL).y);
+    Check(g_bind_capture == BIND_LEFT, "click bind pill -> capture starts again");
+    ClickAt(Center(pillL).x, Center(pillL).y);
+    Check(g_bind_capture == BIND_NONE, "click bind pill while capturing -> cancels");
+    Check(left_bind == 70, "cancelled capture keeps the old bind");
+
+    // ------------------------------------------------------------------
+    // ACCENT SWATCHES (Settings tab)
+    // ------------------------------------------------------------------
+    const ImRect seg3b = lay::SegSeg(3);
+    ClickAt(Center(seg3b).x, Center(seg3b).y);
+    RunFrames(2);
+    // preset 2 = blue (circles at ac.Min.y+46, x = ac.Min.x+22+i*38)
+    ClickAt(lay::AccentCard().Min.x + 22 + 2 * 38, lay::AccentCard().Min.y + 46);
+    Check(fabsf(accent.x - 0.20f) < 0.01f && fabsf(accent.y - 0.52f) < 0.01f,
+          "click blue swatch -> accent changes");
+    RunFrames(2, (dir + "09_accent_blue.bmp").c_str());
+    ClickAt(lay::AccentCard().Min.x + 22 + 0 * 38, lay::AccentCard().Min.y + 46);
+    RunFrames(2, (dir + "10_accent_pink.bmp").c_str());
+
+    // backdrop toggle (Settings tab row 0)
+    const ImRect bd = lay::SwitchIn(lay::PrefsRow(lay::PrefsCard(), 0));
+    ClickAt(Center(bd).x, Center(bd).y);
+    Check(other_background == false, "click Cool backdrop switch -> flips off");
+    RunFrames(2, (dir + "11_backdrop_warm.bmp").c_str());
+    ClickAt(Center(bd).x, Center(bd).y);
+    Check(other_background == true, "click Cool backdrop switch -> flips back");
+
+    // ------------------------------------------------------------------
+    // CONFIG BUTTONS
+    // ------------------------------------------------------------------
+    ClickAt(Center(seg2).x, Center(seg2).y);
+    RunFrames(2);
+    const ImRect row = lay::ConfigBtnRow();
+    ClickAt(row.Min.x + 75.0f, Center(row).y);   // Save now
+    RunFrames(2, (dir + "12_configs_saved.bmp").c_str());
+
+    // ------------------------------------------------------------------
+    // MISC TAB (stats + reset)
+    // ------------------------------------------------------------------
+    ClickAt(Center(seg1).x, Center(seg1).y);
+    RunFrames(2);
+    g_left_total = 12345; g_right_total = 678;
+    RunFrames(2, (dir + "13_misc_stats.bmp").c_str());
+    ClickAt(Center(lay::StatsResetBtn()).x, Center(lay::StatsResetBtn()).y);
+    RunFrames(2);
+    Check(g_left_total == 0 && g_right_total == 0, "Reset counters clears totals");
+
+    // no-game state screenshot
+    g_sim_mc_found = false;
+    RunFrames(2, (dir + "14_no_game.bmp").c_str());
+    g_sim_mc_found = true;
+
+    // ------------------------------------------------------------------
+    printf("\n%d failure(s)\n", g_failures);
+    return g_failures == 0 ? 0 : 1;
+}

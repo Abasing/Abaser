@@ -8,3 +8,5 @@ out/
 .project
 .settings/
 eclipse/
+exe/build/
+exe/sim/sim
