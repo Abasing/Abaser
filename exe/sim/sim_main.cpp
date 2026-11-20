@@ -71,12 +71,15 @@ static bool  g_sim_mc_found  = true;
 static bool  g_sim_autostart = false;
 static int   g_sim_bind_key  = 0;      // what PollBindKey reports this frame
 static float g_sim_cps_l = 0.0f, g_sim_cps_r = 0.0f;
+static int   g_min_calls = 0, g_close_calls = 0;
 
 static bool  SimMcFound(void*)            { return g_sim_mc_found; }
 static bool  SimAutostart(void*)          { return g_sim_autostart; }
 static bool  SimSetAutostart(void*, bool on) { g_sim_autostart = on; return true; }
 static const char* SimConfigPath(void*)   { return "/tmp/abaser_sim.ini"; }
 static int   SimPollBindKey(void*)        { return g_sim_bind_key; }
+static void  SimMinimize(void*)           { g_min_calls++; }
+static void  SimCloseToTray(void*)        { g_close_calls++; }
 
 // ---------------------------------------------------------------------------
 // Test plumbing
@@ -180,12 +183,47 @@ int main(int argc, char** argv)
     g_host.set_autostart     = &SimSetAutostart;
     g_host.config_path       = &SimConfigPath;
     g_host.poll_bind_key     = &SimPollBindKey;
+    g_host.minimize          = &SimMinimize;
+    g_host.close_to_tray     = &SimCloseToTray;
     g_host.user              = nullptr;
 
     // ------------------------------------------------------------------
     // WARM-UP + FIRST SCREENSHOT (Clicker tab, default state)
     // ------------------------------------------------------------------
     RunFrames(5, (dir + "01_clicker_default.bmp").c_str());
+
+    // ------------------------------------------------------------------
+    // FRAMELESS TITLEBAR: the drawn min / X buttons must be clickable
+    // (in the exe the rest of the band is the OS drag region).
+    // ------------------------------------------------------------------
+    ClickAt(Center(lay::TBMinBtn()).x, Center(lay::TBMinBtn()).y);
+    Check(g_min_calls == 1, "click drawn minimize button -> host minimize");
+    ClickAt(Center(lay::TBCloseBtn()).x, Center(lay::TBCloseBtn()).y);
+    Check(g_close_calls == 1, "click drawn close button -> host close-to-tray");
+
+    // ------------------------------------------------------------------
+    // CLICK GATES (ui_state.h): the single policy the engine and this sim
+    // share — an open GUI blocks everything, a drawn bow blocks right only.
+    // ------------------------------------------------------------------
+    {
+        hold_mode = true;
+        mod_gui_open = false; mod_holding_bow = false;
+        Check(GateLeft(true, true) == true,  "gate: left fires in-game with key held");
+        Check(GateRight(true, true) == true, "gate: right fires in-game with key held");
+        mod_gui_open = true;
+        Check(GateLeft(true, true) == false,  "gate: open GUI blocks left");
+        Check(GateRight(true, true) == false, "gate: open GUI blocks right (chest, inv, villager, ...)");
+        mod_gui_open = false; mod_holding_bow = true;
+        Check(GateLeft(true, true) == true,   "gate: drawn bow — left keeps clicking");
+        Check(GateRight(true, true) == false, "gate: drawn bow blocks the right autoclicker");
+        Check(GateBlockHit() == false,        "gate: drawn bow blocks block-hit taps");
+        mod_holding_bow = false;
+        Check(GateLeft(false, true) == false, "gate: no game window blocks everything");
+        Check(GateRight(false, true) == false, "gate: no game window blocks right too");
+        hold_mode = false;
+        Check(GateLeft(true, false) == true,  "gate: non-hold mode clicks nonstop");
+        hold_mode = true;
+    }
 
     // ------------------------------------------------------------------
     // THE CLICK BUG, regression-tested:
@@ -287,26 +325,35 @@ int main(int argc, char** argv)
     Check(left_bind == 70, "cancelled capture keeps the old bind");
 
     // ------------------------------------------------------------------
-    // ACCENT SWATCHES (Settings tab)
+    // THEME PRESETS (Settings tab) — two ints per preset, Discord-style
     // ------------------------------------------------------------------
     const ImRect seg3b = lay::SegSeg(3);
     ClickAt(Center(seg3b).x, Center(seg3b).y);
     RunFrames(2);
-    // preset 2 = blue (circles at ac.Min.y+46, x = ac.Min.x+22+i*38)
-    ClickAt(lay::AccentCard().Min.x + 22 + 2 * 38, lay::AccentCard().Min.y + 46);
-    Check(fabsf(accent.x - 0.20f) < 0.01f && fabsf(accent.y - 0.52f) < 0.01f,
-          "click blue swatch -> accent changes");
-    RunFrames(2, (dir + "09_accent_blue.bmp").c_str());
-    ClickAt(lay::AccentCard().Min.x + 22 + 0 * 38, lay::AccentCard().Min.y + 46);
-    RunFrames(2, (dir + "10_accent_pink.bmp").c_str());
+    {
+        const uint32_t bg_before = g_fb.px[(size_t)(int)(lay::CLIENT_H - 15) * (size_t)(int)(lay::CLIENT_W - 20)];
+        const ImRect blurple = lay::ThemePreset(lay::AccentCard(), 0);
+        ClickAt(Center(blurple).x, Center(blurple).y);
+        Check(theme_primary == 0x5865F2u && theme_accent == 0x8EA1FFu,
+              "click blurple preset -> theme ints set");
+        RunFrames(2, (dir + "09_theme_blurple.bmp").c_str());
+        const uint32_t bg_after = g_fb.px[(size_t)(int)(lay::CLIENT_H - 15) * (size_t)(int)(lay::CLIENT_W - 20)];
+        Check(bg_before != bg_after, "blurple preset re-themes the background gradient");
+    }
+    {
+        const ImRect pinkp = lay::ThemePreset(lay::AccentCard(), 1);
+        ClickAt(Center(pinkp).x, Center(pinkp).y);
+        Check(theme_primary == 0xFF3899u, "click pink preset -> back to classic");
+        RunFrames(2, (dir + "10_theme_pink.bmp").c_str());
+    }
 
     // backdrop toggle (Settings tab row 0)
     const ImRect bd = lay::SwitchIn(lay::PrefsRow(lay::PrefsCard(), 0));
     ClickAt(Center(bd).x, Center(bd).y);
-    Check(other_background == false, "click Cool backdrop switch -> flips off");
-    RunFrames(2, (dir + "11_backdrop_warm.bmp").c_str());
+    Check(other_background == false, "click Dim backdrop switch -> flips off");
+    RunFrames(2, (dir + "11_backdrop_bright.bmp").c_str());
     ClickAt(Center(bd).x, Center(bd).y);
-    Check(other_background == true, "click Cool backdrop switch -> flips back");
+    Check(other_background == true, "click Dim backdrop switch -> flips back");
 
     // ------------------------------------------------------------------
     // CONFIG BUTTONS
@@ -332,6 +379,20 @@ int main(int argc, char** argv)
     g_sim_mc_found = false;
     RunFrames(2, (dir + "14_no_game.bmp").c_str());
     g_sim_mc_found = true;
+
+    // ------------------------------------------------------------------
+    // MOD LINK UI: linked chips + the paused footer states
+    // ------------------------------------------------------------------
+    ClickAt(Center(seg0).x, Center(seg0).y);
+    RunFrames(2);
+    g_host.mod_linked = true;
+    g_host.mod_gui_open = true;
+    RunFrames(2, (dir + "15_mod_menu_open.bmp").c_str());
+    g_host.mod_gui_open = false;
+    g_host.mod_holding_bow = true;
+    RunFrames(2, (dir + "16_mod_bow_held.bmp").c_str());
+    g_host.mod_linked = false;
+    g_host.mod_holding_bow = false;
 
     // ------------------------------------------------------------------
     printf("\n%d failure(s)\n", g_failures);

@@ -3,13 +3,18 @@
 // ----------------------------------------------------------------------------
 //  Apple "Liquid Glass" design language, realized inside Dear ImGui:
 //
-//    * one translucent-material canvas: ambient gradient + two soft light
-//      glows behind everything, glass panels (white @ ~6% alpha, 1px light
-//      borders, top specular highlight) floating on it
+//    * one translucent-material canvas: a Discord-style vertical gradient of
+//      the user's primary color under frosted glass cards — 1 px light
+//      borders, top specular highlights, 16 px continuous radii
+//    * a SEAMLESS frameless titlebar: the same canvas continues into the top
+//      band, with drawn min / close buttons — no native bar anywhere
 //    * big continuous radii everywhere (16-18px cards, pill controls)
-//    * iOS system colors for status; the user accent stays configurable
 //    * real controls: toggle switches, one-row sliders, segmented tabs,
 //      pill buttons — all drawn by hand, all mouse-first
+//    * theme = two 24-bit ints (primary, accent) like Discord's profile
+//      theme_colors; every color on screen derives from them, and knob /
+//      glyph colors are picked by relative luminance so any theme stays
+//      readable
 //
 //  Everything renders into ONE root window, so there is exactly one hover
 //  target — the old four-overlapping-windows layout (whose 800x800
@@ -31,6 +36,7 @@ static const ImVec4 TEXT_MUT = ImVec4(0.55f, 0.59f, 0.68f, 1.00f);
 static const ImVec4 TEXT_DIM = ImVec4(0.40f, 0.44f, 0.52f, 1.00f);
 static const ImVec4 OK_GRN   = ImVec4(0.19f, 0.82f, 0.35f, 1.00f);   // iOS green
 static const ImVec4 BAD_RED  = ImVec4(1.00f, 0.27f, 0.23f, 1.00f);   // iOS red
+static const ImVec4 WARN_AMB = ImVec4(1.00f, 0.76f, 0.28f, 1.00f);   // pause state
 static const ImVec4 GLASS_FILL      = ImVec4(1, 1, 1, 0.060f);
 static const ImVec4 GLASS_FILL_HOV  = ImVec4(1, 1, 1, 0.115f);
 static const ImVec4 GLASS_FILL_ACT  = ImVec4(1, 1, 1, 0.155f);
@@ -62,6 +68,13 @@ static void AddRadialGlow(ImDrawList* dl, ImVec2 center, float radius, const ImV
     }
 }
 
+// Small drop shadow under a knob — deliberately soft and tight, so it reads
+// as depth and not as the "dark bubble" the old build drew.
+static void AddKnobShadow(ImDrawList* dl, ImVec2 center, float radius)
+{
+    AddRadialGlow(dl, ImVec2(center.x, center.y + 1.5f), radius * 1.15f, ImVec4(0, 0, 0, 1), 0.16f);
+}
+
 static void AddTextS(ImDrawList* dl, const ImVec2& pos, ImU32 col, const char* txt)   // small font
 {
     dl->AddText(g_fonts.small, g_fonts.small->FontSize, pos, col, txt);
@@ -69,6 +82,25 @@ static void AddTextS(ImDrawList* dl, const ImVec2& pos, ImU32 col, const char* t
 static ImVec2 TextSizeS(const char* txt)
 {
     return g_fonts.small->CalcTextSizeA(g_fonts.small->FontSize, FLT_MAX, 0.0f, txt);
+}
+static float CenterTextY(const ImRect& r, float text_h)
+{
+    return (r.Min.y + r.Max.y) * 0.5f - text_h * 0.5f;
+}
+
+// Tooltip in the small font, clamped INSIDE the frameless window — a stock
+// SetTooltip near the right edge would hang out of the glass canvas and get
+// cut off by the OS window.
+static void TooltipS(const char* txt)
+{
+    ImGui::PushFont(g_fonts.small);
+    const ImVec2 ts = ImGui::CalcTextSize(txt);
+    const ImVec2 mp = ImGui::GetIO().MousePos;
+    const float x = ImClamp(mp.x + 14.0f, 8.0f, lay::CLIENT_W - ts.x - 26.0f);
+    const float y = ImClamp(mp.y + 16.0f, 8.0f, lay::CLIENT_H - ts.y - 26.0f);
+    ImGui::SetNextWindowPos(ImVec2(x, y));
+    ImGui::SetTooltip("%s", txt);
+    ImGui::PopFont();
 }
 
 // Glass panel: translucent fill + 1px light border + top specular line.
@@ -186,7 +218,7 @@ void StyleAbaserGlass()
 // ============================================================================
 
 // iOS-style toggle switch. `label` is drawn left in the row; the switch sits
-// at the right edge of `row`. Returns true when the value flipped.
+// vertically centered at the right edge of `row`. Returns true on flip.
 static bool GlassToggle(const char* label, bool* v, const ImRect& row, const char* tip = nullptr)
 {
     ImGuiWindow* win = ImGui::GetCurrentWindow();
@@ -206,31 +238,29 @@ static bool GlassToggle(const char* label, bool* v, const ImRect& row, const cha
     *t = target + (*t - target) * 0.55f;
     const float kn = *t;
 
-    // track
-    const ImVec4 track = *v ? accent : ImVec4(1, 1, 1, hovered ? 0.14f : 0.09f);
+    // track: OFF is clearly visible (the old build's 9% white vanished on the
+    // card and left a lonely floating knob — the "off-center button" look)
+    const ImVec4 track_off = ImVec4(1, 1, 1, hovered ? 0.17f : 0.13f);
+    const ImVec4 track = *v ? accent : track_off;
     const float round_t = lay::SW_H * 0.5f;
     dl->AddRectFilled(sw.Min, sw.Max, A(track), round_t);
-    if (!*v)
-        dl->AddRect(ImVec2(sw.Min.x + 0.5f, sw.Min.y + 0.5f), ImVec2(sw.Max.x - 0.5f, sw.Max.y - 0.5f),
-                    AA(WHITE, hovered ? 0.22f : 0.14f), round_t, 0, 1.0f);
-    // knob with a soft drop shadow
+    dl->AddRect(ImVec2(sw.Min.x + 0.5f, sw.Min.y + 0.5f), ImVec2(sw.Max.x - 0.5f, sw.Max.y - 0.5f),
+                AA(WHITE, *v ? 0.28f : (hovered ? 0.30f : 0.20f)), round_t, 0, 1.0f);
+    // knob — dark or white by luminance, so it reads on light accents too
     const float kd = lay::SW_H - 6.0f;
     const float kx = sw.Min.x + 3.0f + kn * (lay::SW_W - kd - 6.0f);
     const ImVec2 kc(kx + kd * 0.5f, sw.Min.y + lay::SW_H * 0.5f);
-    AddRadialGlow(dl, ImVec2(kc.x, kc.y + 1.0f), kd * 0.75f, ImVec4(0, 0, 0, 1), 0.35f);
-    dl->AddCircleFilled(kc, kd * 0.5f, A(WHITE), 24);
-    dl->AddCircle(kc, kd * 0.5f - 0.5f, AA(WHITE, 0.35f), 24, 1.0f);
+    AddKnobShadow(dl, kc, kd * 0.5f);
+    const ImVec4 knob_col = *v ? OnColor(accent) : WHITE;
+    dl->AddCircleFilled(kc, kd * 0.5f, A(knob_col), 24);
+    dl->AddCircle(kc, kd * 0.5f - 0.5f, AA(WHITE, 0.30f), 24, 1.0f);
 
     // label on the left, vertically centered
     ImFont* f = g_fonts.body;
     const float lh = f->FontSize;
-    dl->AddText(ImVec2(row.Min.x, (row.Min.y + row.Max.y) * 0.5f - lh * 0.5f), A(TEXT_HI), label);
+    dl->AddText(ImVec2(row.Min.x, CenterTextY(row, lh)), A(TEXT_HI), label);
 
-    if (tip && hovered) {
-        ImGui::PushFont(g_fonts.small);
-        ImGui::SetTooltip("%s", tip);
-        ImGui::PopFont();
-    }
+    if (tip && hovered) TooltipS(tip);
     return pressed;
 }
 
@@ -287,22 +317,18 @@ static bool GlassSliderCore(const char* id_salt, const char* label, const Slider
     const float th = 6.0f;
     const float pad = 7.0f;
     dl->AddRectFilled(ImVec2(track.Min.x, cy - th * 0.5f), ImVec2(track.Max.x, cy + th * 0.5f),
-                      AA(WHITE, 0.10f), th * 0.5f);
+                      AA(WHITE, 0.13f), th * 0.5f);
     const float fillw = pad + frac * ((track.Max.x - track.Min.x) - 2 * pad);
     if (fillw > 2.0f)
         dl->AddRectFilled(ImVec2(track.Min.x, cy - th * 0.5f), ImVec2(track.Min.x + fillw, cy + th * 0.5f),
-                          AA(accent, 0.85f), th * 0.5f);
+                          AA(accent, 0.90f), th * 0.5f);
     const float kx = track.Min.x + pad + frac * ((track.Max.x - track.Min.x) - 2 * pad);
     const float kr = hovered || active ? 8.0f : 7.0f;
-    AddRadialGlow(dl, ImVec2(kx, cy + 1.0f), kr * 1.5f, ImVec4(0, 0, 0, 1), 0.30f);
-    dl->AddCircleFilled(ImVec2(kx, cy), kr, A(WHITE), 24);
+    AddKnobShadow(dl, ImVec2(kx, cy), kr);
+    dl->AddCircleFilled(ImVec2(kx, cy), kr, A(OnColor(accent)), 24);
     dl->AddCircle(ImVec2(kx, cy), kr - 0.5f, AA(accent, active ? 0.9f : 0.45f), 24, 1.5f);
 
-    if (tip && hovered) {
-        ImGui::PushFont(g_fonts.small);
-        ImGui::SetTooltip("%s", tip);
-        ImGui::PopFont();
-    }
+    if (tip && hovered) TooltipS(tip);
     return changed;
 }
 
@@ -314,7 +340,7 @@ static bool GlassSlider(const char* id_salt, const char* label, float* v, float 
     return GlassSliderCore(id_salt, label, b, false, lo, hi, fmt, row, tip);
 }
 static bool GlassSliderI(const char* id_salt, const char* label, int* v, int lo, int hi, const char* fmt,
-                         const ImRect& row, const char* tip = nullptr)
+                        const ImRect& row, const char* tip = nullptr)
 {
     SliderBinding b = { v, &SBind_GetI, &SBind_SetI };
     return GlassSliderCore(id_salt, label, b, true, (float)lo, (float)hi, fmt, row, tip);
@@ -338,19 +364,31 @@ static bool GlassButtonPill(const char* label, const ImRect& r, bool emphasize =
 
     ImFont* f = g_fonts.body;
     const ImVec2 ts = f->CalcTextSizeA(f->FontSize, FLT_MAX, 0.0f, label);
-    dl->AddText(ImVec2((r.Min.x + r.Max.x) * 0.5f - ts.x * 0.5f, (r.Min.y + r.Max.y) * 0.5f - ts.y * 0.5f),
+    dl->AddText(ImVec2((r.Min.x + r.Max.x) * 0.5f - ts.x * 0.5f, CenterTextY(r, ts.y)),
                 A(hovered ? TEXT_HI : ImVec4(0.85f, 0.88f, 0.94f, 1.0f)), label);
     return ImGui::IsItemClicked(ImGuiMouseButton_Left);
 }
 
-// Bind pill: shows the current key; click to start/stop capture.
+// Bind pill: shows the current key; click to start/stop capture. The pill
+// grows leftward past its base width when the text needs it (the pulsing
+// "press a key" capture label is wider than a key name) — it never overlaps
+// the row label, which sits at the far left of the row.
 static bool BindPill(const char* label, int* bind, int which, const ImRect& row)
 {
     ImGuiWindow* win = ImGui::GetCurrentWindow();
     ImDrawList* dl = win->DrawList;
-    const ImRect r = lay::PillIn(row);
     char idbuf[64];
     snprintf(idbuf, sizeof(idbuf), "##bind_%s", label);
+    const bool capturing0 = (g_bind_capture == which);
+    char txt0[24];
+    if (capturing0) snprintf(txt0, sizeof(txt0), "%s", VSTR("press a key"));
+    else            snprintf(txt0, sizeof(txt0), "%s", GetKeyName(*bind)[0] ? GetKeyName(*bind) : VSTR("unbound"));
+    // key names render big (title font) — measure and draw with the SAME font
+    ImFont* kf = g_fonts.title;
+    const ImVec2 ts0 = kf->CalcTextSizeA(kf->FontSize, FLT_MAX, 0.0f, txt0);
+    const float w = ImMax(lay::PILL_W, ts0.x + 18.0f);
+    const ImRect r(row.Max.x - w, (row.Min.y + row.Max.y) * 0.5f - lay::PILL_H * 0.5f,
+                   row.Max.x, (row.Min.y + row.Max.y) * 0.5f + lay::PILL_H * 0.5f);
     ImGui::SetCursorScreenPos(r.Min);
     ImGui::InvisibleButton(idbuf, r.GetSize());
     const bool hovered = ImGui::IsItemHovered();
@@ -368,16 +406,13 @@ static bool BindPill(const char* label, int* bind, int which, const ImRect& row)
     dl->AddRectFilled(r.Min, r.Max, A(fill), r.GetHeight() * 0.5f);
     dl->AddRect(ImVec2(r.Min.x + 0.5f, r.Min.y + 0.5f), ImVec2(r.Max.x - 0.5f, r.Max.y - 0.5f),
                 A(capturing ? ImVec4(accent.x, accent.y, accent.z, 0.35f + 0.5f * pulse)
-                            : ImVec4(1, 1, 1, hovered ? 0.22f : 0.13f)),
+                            : ImVec4(1, 1, 1, hovered ? 0.22f : 0.14f)),
                 r.GetHeight() * 0.5f, 0, 1.0f);
 
-    char txt[24];
-    if (capturing) snprintf(txt, sizeof(txt), "%s", VSTR("press a key"));
-    else           snprintf(txt, sizeof(txt), "%s", GetKeyName(*bind)[0] ? GetKeyName(*bind) : VSTR("unbound"));
-    ImFont* f = g_fonts.small;
-    const ImVec2 ts = f->CalcTextSizeA(f->FontSize, FLT_MAX, 0.0f, txt);
-    dl->AddText(ImVec2((r.Min.x + r.Max.x) * 0.5f - ts.x * 0.5f, (r.Min.y + r.Max.y) * 0.5f - ts.y * 0.5f),
-                A(capturing ? accent : TEXT_HI), txt);
+    ImFont* f = kf;
+    const ImVec2 ts = f->CalcTextSizeA(f->FontSize, FLT_MAX, 0.0f, txt0);
+    dl->AddText(f, f->FontSize, ImVec2((r.Min.x + r.Max.x) * 0.5f - ts.x * 0.5f, CenterTextY(r, ts.y)),
+                A(capturing ? accent : TEXT_HI), txt0);
     return clicked;
 }
 
@@ -409,18 +444,21 @@ static ImRect Card(ImDrawList* dl, const ImRect& r, const char* title)
 }
 
 // --- background -----------------------------------------------------------------
+// Discord-profile style: a vertical gradient of the user's primary color
+// (top = lighter shade, bottom = deep shade), two soft glows tinted by the
+// accent and the primary. No more gray slab; the whole canvas re-themes.
 static void PaintBackground(ImDrawList* dl)
 {
     const ImVec2 sz = lay::Client();
-    const bool cool = other_background;
-    const ImVec4 top = cool ? ImVec4(0.043f, 0.055f, 0.090f, 1) : ImVec4(0.075f, 0.052f, 0.060f, 1);
-    const ImVec4 bot = cool ? ImVec4(0.098f, 0.110f, 0.155f, 1) : ImVec4(0.133f, 0.098f, 0.102f, 1);
+    const ImVec4 pr = Im4FromRgb(theme_primary);
+    const float  k  = other_background ? 1.0f : 0.62f;    // "Dim backdrop"
+    const ImVec4 top = ShadeColor(pr, 0.30f * k);
+    const ImVec4 bot = ShadeColor(pr, 0.125f * k);
     dl->AddRectFilledMultiColor(ImVec2(0, 0), sz, A(top), A(top), A(bot), A(bot));
 
-    // ambient light glows — the "liquid" in liquid glass
-    AddRadialGlow(dl, ImVec2(sz.x * 0.95f, 26.0f), 250.0f, ImVec4(accent.x, accent.y, accent.z, 1), 0.11f);
-    AddRadialGlow(dl, ImVec2(sz.x * 0.05f, sz.y + 20.0f), 230.0f,
-                  cool ? ImVec4(0.25f, 0.45f, 1.00f, 1) : ImVec4(0.95f, 0.45f, 0.35f, 1), 0.10f);
+    // ambient light glows — the "liquid" in liquid glass (kept subtle)
+    AddRadialGlow(dl, ImVec2(sz.x * 0.94f, 30.0f), 250.0f, accent, 0.09f);
+    AddRadialGlow(dl, ImVec2(sz.x * 0.06f, sz.y + 20.0f), 230.0f, pr, 0.08f);
 }
 
 // ============================================================================
@@ -465,21 +503,60 @@ void DrawUI(const AbaserUIHost& host, const char* version)
 
     PaintBackground(dl);
 
-    // ---- header ------------------------------------------------------------
+    // ---- seamless titlebar --------------------------------------------------
+    // The OS drags this band (WM_NCHITTEST -> HTCAPTION, main.cpp); we only
+    // draw here. The two buttons sit in the reserved HTCLIENT corner.
     {
         ImFont* tf = g_fonts.title;
-        dl->AddText(g_fonts.title, tf->FontSize, ImVec2(lay::MARGIN, 14.0f), A(TEXT_HI), VSTR("Abaser Clicker"));
-        AddTextS(dl, ImVec2(lay::MARGIN, 42.0f), AA(TEXT_DIM, 1.0f), version);
+        dl->AddText(g_fonts.title, tf->FontSize, ImVec2(lay::MARGIN, (lay::TB_H - tf->FontSize) * 0.5f),
+                    A(TEXT_HI), VSTR("Abaser Clicker"));
 
-        // status chips, right-aligned
-        ImVec2 cur(lay::ContentRight(), 14.0f);
-        StatusChip(dl, cur.x, 14.0f,
-                   host.mc_found(host.user) ? OK_GRN : BAD_RED,
-                   host.mc_found(host.user) ? VSTR("Minecraft") : VSTR("No game"), &cur);
-        StatusChip(dl, cur.x, 14.0f, left_enabled ? accent : ImVec4(1, 1, 1, 0.25f),
+        // status chips, right-aligned in front of the window buttons
+        ImVec2 cur(lay::TBChipRight(), (lay::TB_H - 22.0f) * 0.5f);
+        const bool link_ok = host.mod_linked;
+        if (link_ok) {
+            StatusChip(dl, cur.x, cur.y, OK_GRN, VSTR("Mod"), &cur);
+        }
+        if (link_ok) {
+            // in-game state, exactly what the mod reports
+            const bool menu = host.mod_gui_open;
+            StatusChip(dl, cur.x, cur.y, menu ? WARN_AMB : OK_GRN,
+                       menu ? VSTR("Menu open") : VSTR("Minecraft"), &cur);
+        } else {
+            StatusChip(dl, cur.x, cur.y,
+                       host.mc_found(host.user) ? OK_GRN : BAD_RED,
+                       host.mc_found(host.user) ? VSTR("Minecraft") : VSTR("No game"), &cur);
+        }
+        StatusChip(dl, cur.x, cur.y, left_enabled ? accent : ImVec4(1, 1, 1, 0.25f),
                    left_enabled ? VSTR("L on") : VSTR("L off"), &cur);
-        StatusChip(dl, cur.x, 14.0f, right_enabled ? accent : ImVec4(1, 1, 1, 0.25f),
+        StatusChip(dl, cur.x, cur.y, right_enabled ? accent : ImVec4(1, 1, 1, 0.25f),
                    right_enabled ? VSTR("R on") : VSTR("R off"), &cur);
+
+        // window controls: minimize + close, Windows-style, top right
+        {
+            const ImRect mr = lay::TBMinBtn();
+            ImGui::SetCursorScreenPos(mr.Min);
+            ImGui::InvisibleButton("##winmin", mr.GetSize());
+            const bool hov = ImGui::IsItemHovered();
+            const float cy = (mr.Min.y + mr.Max.y) * 0.5f;
+            if (hov) dl->AddRectFilled(mr.Min, mr.Max, AA(WHITE, 0.10f), 0.0f);
+            dl->AddLine(ImVec2(mr.GetCenter().x - 5.0f, cy), ImVec2(mr.GetCenter().x + 5.0f, cy),
+                        AA(WHITE, hov ? 0.95f : 0.70f), 1.4f);
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && host.minimize)
+                host.minimize(host.user);
+
+            const ImRect cr = lay::TBCloseBtn();
+            ImGui::SetCursorScreenPos(cr.Min);
+            ImGui::InvisibleButton("##winclose", cr.GetSize());
+            const bool hc = ImGui::IsItemHovered();
+            const float cx = (cr.Min.x + cr.Max.x) * 0.5f;
+            if (hc) dl->AddRectFilled(cr.Min, cr.Max, A(ImVec4(0.86f, 0.21f, 0.20f, 0.65f)), 0.0f);
+            const ImU32 xc = hc ? IM_COL32(255, 255, 255, 235) : AA(WHITE, 0.70f);
+            dl->AddLine(ImVec2(cx - 5.0f, cy - 5.0f), ImVec2(cx + 5.0f, cy + 5.0f), xc, 1.4f);
+            dl->AddLine(ImVec2(cx - 5.0f, cy + 5.0f), ImVec2(cx + 5.0f, cy - 5.0f), xc, 1.4f);
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && host.close_to_tray)
+                host.close_to_tray(host.user);
+        }
     }
 
     // ---- segmented control --------------------------------------------------
@@ -500,18 +577,21 @@ void DrawUI(const AbaserUIHost& host, const char* version)
             if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) g_tab = i;
             if (active) {
                 const ImRect pill(sr.Min.x + 3, sr.Min.y + 3, sr.Max.x - 3, sr.Max.y - 3);
+                // active pill: white glass with a touch of the accent — stays
+                // premium on every theme instead of a flat gray slab
                 dl->AddRectFilled(pill.Min, pill.Max, AA(WHITE, 0.14f), pill.GetHeight() * 0.5f);
+                dl->AddRectFilled(pill.Min, pill.Max, AA(accent, 0.16f), pill.GetHeight() * 0.5f);
                 dl->AddRect(ImVec2(pill.Min.x + 0.5f, pill.Min.y + 0.5f), ImVec2(pill.Max.x - 0.5f, pill.Max.y - 0.5f),
                             AA(WHITE, 0.22f), pill.GetHeight() * 0.5f, 0, 1.0f);
                 dl->AddLine(ImVec2(pill.Min.x + pill.GetWidth() * 0.25f, pill.Min.y + 1.5f),
                             ImVec2(pill.Max.x - pill.GetWidth() * 0.25f, pill.Min.y + 1.5f),
-                            AA(WHITE, 0.35f), 1.0f);
+                            AA(accent, 0.55f), 1.0f);
             } else if (hovered) {
                 dl->AddRectFilled(sr.Min, sr.Max, AA(WHITE, 0.05f), sr.GetHeight() * 0.5f - 2.0f);
             }
             ImFont* f = g_fonts.body;
             const ImVec2 ts = f->CalcTextSizeA(f->FontSize, FLT_MAX, 0.0f, names[i]);
-            dl->AddText(ImVec2((sr.Min.x + sr.Max.x) * 0.5f - ts.x * 0.5f, (sr.Min.y + sr.Max.y) * 0.5f - ts.y * 0.5f),
+            dl->AddText(ImVec2((sr.Min.x + sr.Max.x) * 0.5f - ts.x * 0.5f, CenterTextY(sr, ts.y)),
                         A(active ? TEXT_HI : (hovered ? ImVec4(0.82f, 0.85f, 0.92f, 1.0f) : TEXT_MUT)), names[i]);
         }
     }
@@ -522,15 +602,16 @@ void DrawUI(const AbaserUIHost& host, const char* version)
         if (left_min_cps >= left_max_cps)  left_min_cps  = left_max_cps - 0.5f;
         if (right_min_cps >= right_max_cps) right_min_cps = right_max_cps - 0.5f;
 
-        // two glass cards, left & right clicker
+        // two glass cards, left & right clicker — each a proper panel now
         const ImRect lc = lay::LeftCard(), rc = lay::RightCard();
+        AddGlassPanel(dl, lc, 16.0f, CARD_FILL);
+        AddGlassPanel(dl, rc, 16.0f, CARD_FILL);
         {
             const ImRect row = lay::SideToggle(lc);
-            char lbl[32]; snprintf(lbl, sizeof(lbl), "%s", VSTR("Left clicker"));
-            GlassToggle(lbl, &left_enabled, row);
+            GlassToggle(VSTR("Left clicker"), &left_enabled, row);
             BindPill("left", &left_bind, BIND_LEFT, lay::SideBind(lc));
             AddTextS(dl, ImVec2(lay::CardContent(lc).Min.x,
-                                (lay::SideBind(lc).Min.y + lay::SideBind(lc).Max.y) * 0.5f - TextSizeS(VSTR("Hotkey")).y * 0.5f),
+                                CenterTextY(lay::SideBind(lc), TextSizeS(VSTR("Hotkey")).y)),
                      A(TEXT_MUT), VSTR("Hotkey"));
             GlassSlider("l_max", VSTR("CPS max"), &left_max_cps, CPS_LO, CPS_HI, "%.1f", lay::SideSlider(lc, 0));
             GlassSlider("l_min", VSTR("CPS min"), &left_min_cps, CPS_LO, CPS_HI, "%.1f", lay::SideSlider(lc, 1));
@@ -541,7 +622,7 @@ void DrawUI(const AbaserUIHost& host, const char* version)
             GlassToggle(VSTR("Right clicker"), &right_enabled, row);
             BindPill("right", &right_bind, BIND_RIGHT, lay::SideBind(rc));
             AddTextS(dl, ImVec2(lay::CardContent(rc).Min.x,
-                                (lay::SideBind(rc).Min.y + lay::SideBind(rc).Max.y) * 0.5f - TextSizeS(VSTR("Hotkey")).y * 0.5f),
+                                CenterTextY(lay::SideBind(rc), TextSizeS(VSTR("Hotkey")).y)),
                      A(TEXT_MUT), VSTR("Hotkey"));
             GlassSlider("r_max", VSTR("CPS max"), &right_max_cps, CPS_LO, CPS_HI, "%.1f", lay::SideSlider(rc, 0));
             GlassSlider("r_min", VSTR("CPS min"), &right_min_cps, CPS_LO, CPS_HI, "%.1f", lay::SideSlider(rc, 1));
@@ -564,7 +645,8 @@ void DrawUI(const AbaserUIHost& host, const char* version)
         GlassToggle(VSTR("Block Hit"), &blockhit, lay::BlockToggle(),
                     VSTR("Sword-block taps ride along with left clicks."));
         GlassSliderI("bh_ch", VSTR("Chance"), &blockhit_chance, BH_LO, BH_HI, "%d%%", lay::BlockSlider());
-        AddTextS(dl, ImVec2(lay::MARGIN + 14, 224.0f), A(TEXT_DIM), VSTR("Note: applies to the left clicker only."));
+        AddTextS(dl, ImVec2(lay::MARGIN + 14, lay::BlockNoteY()), A(TEXT_DIM),
+                 VSTR("Note: applies to the left clicker only."));
 
         const ImRect sc = lay::StatsCard();
         Card(dl, sc, VSTR("Statistics"));
@@ -572,10 +654,10 @@ void DrawUI(const AbaserUIHost& host, const char* version)
             std::string l = FormatCount(g_left_total);
             std::string r = FormatCount(g_right_total);
             ImFont* tf = g_fonts.title;
-            dl->AddText(g_fonts.title, tf->FontSize, ImVec2(sc.Min.x + 14, 288.0f), A(TEXT_HI), l.c_str());
-            AddTextS(dl, ImVec2(sc.Min.x + 14, 288.0f + tf->FontSize + 4.0f), A(TEXT_MUT), VSTR("left clicks"));
-            dl->AddText(g_fonts.title, tf->FontSize, ImVec2(sc.Min.x + 150, 288.0f), A(TEXT_HI), r.c_str());
-            AddTextS(dl, ImVec2(sc.Min.x + 150, 288.0f + tf->FontSize + 4.0f), A(TEXT_MUT), VSTR("right clicks"));
+            dl->AddText(g_fonts.title, tf->FontSize, ImVec2(sc.Min.x + 14, sc.Min.y + 44.0f), A(TEXT_HI), l.c_str());
+            AddTextS(dl, ImVec2(sc.Min.x + 14, sc.Min.y + 44.0f + tf->FontSize + 4.0f), A(TEXT_MUT), VSTR("left clicks"));
+            dl->AddText(g_fonts.title, tf->FontSize, ImVec2(sc.Min.x + 160, sc.Min.y + 44.0f), A(TEXT_HI), r.c_str());
+            AddTextS(dl, ImVec2(sc.Min.x + 160, sc.Min.y + 44.0f + tf->FontSize + 4.0f), A(TEXT_MUT), VSTR("right clicks"));
             if (GlassButtonPill(VSTR("Reset counters"), lay::StatsResetBtn())) {
                 g_left_total = 0;
                 g_right_total = 0;
@@ -585,8 +667,8 @@ void DrawUI(const AbaserUIHost& host, const char* version)
     else if (g_tab == 2) {
         const ImRect cc = lay::ConfigCard();
         Card(dl, cc, VSTR("Config file"));
-        AddTextS(dl, ImVec2(cc.Min.x, 148.0f), A(TEXT_MUT), VSTR("File"));
-        AddTextS(dl, ImVec2(cc.Min.x + 44.0f, 148.0f),
+        AddTextS(dl, ImVec2(cc.Min.x, lay::ConfigFileY()), A(TEXT_MUT), VSTR("File"));
+        AddTextS(dl, ImVec2(cc.Min.x + 44.0f, lay::ConfigFileY()),
                  A(ImVec4(0.80f, 0.83f, 0.90f, 1.0f)),
                  Ellipsize(host.config_path(host.user), cc.Max.x - cc.Min.x - 44.0f).c_str());
 
@@ -605,57 +687,112 @@ void DrawUI(const AbaserUIHost& host, const char* version)
             ResetDefaults();
             snprintf(g_config_status, sizeof(g_config_status), "defaults restored (not saved yet)");
         }
-        ImGui::SetCursorScreenPos(ImVec2(cc.Min.x, 238.0f));
+        ImGui::SetCursorScreenPos(ImVec2(cc.Min.x, lay::ConfigStatusY()));
         ImGui::PushTextWrapPos(cc.Max.x);
         ImGui::TextDisabled("%s", g_config_status);
         ImGui::PopTextWrapPos();
     }
     else if (g_tab == 3) {
-        const ImRect ac = lay::AccentCard();
-        Card(dl, ac, VSTR("Accent"));
+        // ---- theme card (Discord-style two-color theming) ----
+        const ImRect tc = lay::AccentCard();
+        Card(dl, tc, VSTR("Theme"));
         {
-            static const ImVec4 presets[6] = {
-                ImVec4(1.00f, 0.22f, 0.55f, 1.0f),   // pink
-                ImVec4(1.00f, 0.14f, 1.00f, 1.0f),   // magenta (classic)
-                ImVec4(0.20f, 0.52f, 1.00f, 1.0f),   // blue
-                ImVec4(0.72f, 0.40f, 0.98f, 1.0f),   // purple
-                ImVec4(1.00f, 0.58f, 0.20f, 1.0f),   // orange
-                ImVec4(0.35f, 0.85f, 0.45f, 1.0f),   // green
+            // preset pairs: { primary, accent } — first is Discord's blurple
+            static const unsigned presets[6][2] = {
+                { 0x5865F2u, 0x8EA1FFu },   // blurple (Discord)
+                { 0xFF3899u, 0xFF3899u },   // pink (classic Abaser)
+                { 0x2563EBu, 0x60A5FAu },   // blue
+                { 0x8B5CF6u, 0xC4B5FDu },   // purple
+                { 0xF97316u, 0xFDBA74u },   // orange
+                { 0x22C55Eu, 0x86EFACu },   // green
             };
-            const float r = 13.0f;
-            const float cy = ac.Min.y + 46.0f;
+            static const char* names[6] = { VSTR("Blurple"), VSTR("Pink"), VSTR("Blue"),
+                                            VSTR("Purple"), VSTR("Orange"), VSTR("Green") };
             for (int i = 0; i < 6; i++) {
-                const float cx = ac.Min.x + 22.0f + i * 38.0f;
+                const ImRect pr = lay::ThemePreset(tc, i);
                 char idbuf[24];
                 snprintf(idbuf, sizeof(idbuf), "##preset%d", i);
-                ImGui::SetCursorScreenPos(ImVec2(cx - r - 2, cy - r - 2));
-                ImGui::InvisibleButton(idbuf, ImVec2(2 * r + 4, 2 * r + 4));
-                if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
-                    accent = presets[i];
-                const bool selected = fabsf(accent.x - presets[i].x) < 0.01f && fabsf(accent.y - presets[i].y) < 0.01f
-                                   && fabsf(accent.z - presets[i].z) < 0.01f;
-                dl->AddCircleFilled(ImVec2(cx, cy), r, A(presets[i]), 28);
+                ImGui::SetCursorScreenPos(pr.Min);
+                ImGui::InvisibleButton(idbuf, pr.GetSize());
+                if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+                    theme_primary = presets[i][0];
+                    theme_accent  = presets[i][1];
+                    SyncAccentFromTheme();
+                }
+                const bool selected = (theme_primary == presets[i][0] && theme_accent == presets[i][1]);
+                // mini profile-banner preview: vertical gradient of the pair.
+                // Borders here are layered FILLED rects, not stroked paths —
+                // tiny stroked rounded rects come out dashed on some
+                // rasterizers, layered fills never do.
+                const ImVec4 prc = Im4FromRgb(presets[i][0]);
                 if (selected)
-                    dl->AddCircle(ImVec2(cx, cy), r + 3.5f, A(WHITE), 28, 2.0f);
+                    dl->AddRectFilled(ImVec2(pr.Min.x - 2.5f, pr.Min.y - 2.5f), ImVec2(pr.Max.x + 2.5f, pr.Max.y + 2.5f),
+                                      A(WHITE), 10.0f);
                 else if (ImGui::IsItemHovered())
-                    dl->AddCircle(ImVec2(cx, cy), r + 2.0f, AA(WHITE, 0.35f), 28, 1.5f);
+                    dl->AddRectFilled(ImVec2(pr.Min.x - 1.5f, pr.Min.y - 1.5f), ImVec2(pr.Max.x + 1.5f, pr.Max.y + 1.5f),
+                                      AA(WHITE, 0.40f), 9.0f);
+                dl->AddRectFilled(pr.Min, pr.Max, AA(WHITE, 0.30f), 8.0f);
+                const ImVec2 gmin(pr.Min.x + 1.0f, pr.Min.y + 1.0f), gmax(pr.Max.x - 1.0f, pr.Max.y - 1.0f);
+                dl->AddRectFilledMultiColor(gmin, gmax, A(prc), A(prc),
+                                            A(ShadeColor(prc, 0.42f)), A(ShadeColor(prc, 0.42f)));
+                if (ImGui::IsItemHovered()) TooltipS(names[i]);
             }
-            // custom color pill (small ColorEdit)
-            ImGui::SetCursorScreenPos(ImVec2(ac.Max.x - 14.0f - 92.0f, ac.Min.y + 33.0f));
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 15.0f);
-            ImGui::ColorEdit3("##custom", (float*)&accent,
-                              ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_NoBorder);
-            ImGui::PopStyleVar();
-            AddTextS(dl, ImVec2(ac.Max.x - 14.0f - 52.0f, ac.Min.y + 40.0f), A(TEXT_MUT), VSTR("Custom"));
+
+            // custom pickers: Primary (profile gradient) + Accent (controls)
+            {
+                const ImRect psw = lay::ThemePrimarySw(tc);
+                const ImVec4 pc = Im4FromRgb(theme_primary);
+                float prim[3] = { pc.x, pc.y, pc.z };
+                ImGui::SetCursorScreenPos(psw.Min);
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 9.0f);
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 4));
+                ImGui::PushStyleColor(ImGuiCol_Button, pc);
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, pc);
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, pc);
+                if (ImGui::ColorEdit3("##primary_c", prim,
+                                      ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel |
+                                      ImGuiColorEditFlags_NoBorder | ImGuiColorEditFlags_NoOptions))
+                {
+                    theme_primary = RgbFromIm4(ImVec4(prim[0], prim[1], prim[2], 1.0f));
+                    SyncAccentFromTheme();
+                }
+                ImGui::PopStyleColor(3);
+                ImGui::PopStyleVar(2);
+                AddTextS(dl, ImVec2(psw.Max.x + 8.0f, CenterTextY(psw, TextSizeS(VSTR("Primary")).y)),
+                         A(TEXT_MUT), VSTR("Primary"));
+                if (ImGui::IsItemHovered()) TooltipS(VSTR("The background gradient color"));
+            }
+            {
+                const ImRect asw = lay::ThemeAccentSw(tc);
+                const ImVec4 ac = Im4FromRgb(theme_accent);
+                float acc[3] = { ac.x, ac.y, ac.z };
+                ImGui::SetCursorScreenPos(asw.Min);
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 9.0f);
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 4));
+                ImGui::PushStyleColor(ImGuiCol_Button, ac);
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ac);
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ac);
+                if (ImGui::ColorEdit3("##accent_c", acc,
+                                      ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel |
+                                      ImGuiColorEditFlags_NoBorder | ImGuiColorEditFlags_NoOptions))
+                {
+                    theme_accent = RgbFromIm4(ImVec4(acc[0], acc[1], acc[2], 1.0f));
+                    SyncAccentFromTheme();
+                }
+                ImGui::PopStyleColor(3);
+                ImGui::PopStyleVar(2);
+                AddTextS(dl, ImVec2(asw.Max.x + 8.0f, CenterTextY(asw, TextSizeS(VSTR("Accent")).y)),
+                         A(TEXT_MUT), VSTR("Accent"));
+                if (ImGui::IsItemHovered()) TooltipS(VSTR("Switches, sliders and highlights"));
+            }
         }
 
         const ImRect pc = lay::PrefsCard();
         Card(dl, pc, VSTR("Preferences"));
-        GlassToggle(VSTR("Cool backdrop"), &other_background, lay::PrefsRow(pc, 0),
-                    VSTR("Bluish slate vs warm charcoal behind the glass."));
+        GlassToggle(VSTR("Dim backdrop"), &other_background, lay::PrefsRow(pc, 0),
+                    VSTR("Darkens the theme gradient behind the glass."));
         BindPill("hide", &hide_bind, BIND_HIDE, lay::PrefsRow(pc, 1));
-        AddTextS(dl, ImVec2(pc.Min.x + 14,
-                            (lay::PrefsRow(pc, 1).Min.y + lay::PrefsRow(pc, 1).Max.y) * 0.5f - TextSizeS(VSTR("Hide window")).y * 0.5f),
+        AddTextS(dl, ImVec2(pc.Min.x + 14, CenterTextY(lay::PrefsRow(pc, 1), TextSizeS(VSTR("Hide window")).y)),
                  A(TEXT_MUT), VSTR("Hide window"));
         {
             const ImRect row = lay::PrefsRow(pc, 2);
@@ -691,12 +828,26 @@ void DrawUI(const AbaserUIHost& host, const char* version)
         const bool armed = left_enabled || right_enabled;
         char live[64];
         snprintf(live, sizeof(live), VSTR("%.1f L / %.1f R CPS live"), host.live_cps_left, host.live_cps_right);
-        dl->AddCircleFilled(ImVec2(fr.Min.x + 3.5f, fr.Min.y + 9.0f), 3.0f,
+        const float dot_cy = fr.Min.y + 4.0f + TextSizeS("0").y * 0.5f;
+        dl->AddCircleFilled(ImVec2(fr.Min.x + 3.5f, dot_cy), 3.0f,
                             A(armed ? OK_GRN : ImVec4(1, 1, 1, 0.25f)), 12);
         AddTextS(dl, ImVec2(fr.Min.x + 12.0f, fr.Min.y + 4.0f), A(armed ? TEXT_HI : TEXT_MUT), live);
-        const char* hint = VSTR("F4 arm / disarm - INSERT hides to tray");
+
+        // the right hint tells you WHY nothing is clicking when the mod pauses it
+        char hint[128];
+        const bool paused_menu = host.mod_linked && host.mod_gui_open;
+        const bool paused_bow  = host.mod_linked && host.mod_holding_bow && !paused_menu;
+        if (paused_menu) {
+            snprintf(hint, sizeof(hint), "%s", VSTR("paused - a menu is open"));
+        } else if (paused_bow) {
+            snprintf(hint, sizeof(hint), "%s", VSTR("paused - bow drawn"));
+        } else {
+            snprintf(hint, sizeof(hint), VSTR("%s arm / disarm - %s hides to tray"),
+                     GetKeyName(left_bind), GetKeyName(hide_bind));
+        }
         const ImVec2 hs = TextSizeS(hint);
-        AddTextS(dl, ImVec2(fr.Max.x - hs.x, fr.Min.y + 4.0f), A(TEXT_DIM), hint);
+        AddTextS(dl, ImVec2(fr.Max.x - hs.x, fr.Min.y + 4.0f),
+                 A(paused_menu || paused_bow ? WARN_AMB : TEXT_DIM), hint);
     }
 
     ImGui::End();

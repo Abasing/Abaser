@@ -10,3 +10,4 @@ out/
 eclipse/
 exe/build/
 exe/sim/sim
+exe/sim/shots/*.bmp

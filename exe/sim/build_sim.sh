@@ -10,4 +10,4 @@ g++ -std=c++17 -O1 -Wall -Wno-unused-variable \
     third_party/imgui/imgui.cpp third_party/imgui/imgui_draw.cpp \
     third_party/imgui/imgui_tables.cpp third_party/imgui/imgui_widgets.cpp \
     -o sim/sim
-./sim sim/shots
+./sim/sim sim/shots

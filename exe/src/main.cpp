@@ -28,7 +28,12 @@
 //      "down", and blocked the UI thread 150 ms per hit.
 //    * New Apple "Liquid Glass" look: one translucent canvas, glass cards,
 //      iOS-style switches / segmented tabs / sliders, all in ui.cpp.
-//    * Dark native title bar + rounded OS corners via DWM where available.
+//    * FRAMELESS WINDOW: WS_POPUP + a custom drawn titlebar band — the app
+//      is one seamless glass canvas, no native bar. Dragging works through
+//      WM_NCHITTEST (HTCAPTION over the band, minus the min/X corner).
+//    * MOD LINK: launched with --managed, a stdin reader thread ingests the
+//      companion mod's state lines (GUI open? bow held?) and drives the
+//      click gates; stdin EOF (game closed) shuts the clicker down.
 // ============================================================================
 #include "imgui.h"
 #include "imgui_impl_dx9.h"
@@ -38,6 +43,7 @@
 #include "abaser_compression.h"
 #include "abaser_assets.h"
 #include <windows.h>
+#include <windowsx.h>             // GET_X_LPARAM / GET_Y_LPARAM
 #include <shellapi.h>             // Shell_NotifyIcon — the tray
 #include <d3d9.h>
 #include <thread>
@@ -172,6 +178,10 @@ static int PollBindKeyPlatform(void*)
 // WM_LBUTTONUP pairs while active, honouring hit chance and randomised CPS
 // between min and max. "Block Hit" additionally right-clicks (sword block)
 // during left clicks with its own probability.
+//
+// The click GATES live in ui_state.h (shared with the simulator):
+//   * any open in-game GUI (mod state) blocks everything,
+//   * a drawn bow blocks every right-click emission — left keeps clicking.
 // ---------------------------------------------------------------------------
 static void ClickerThread()
 {
@@ -184,8 +194,8 @@ static void ClickerThread()
         const bool base_ok  = (target != nullptr) && focus_ok;
 
         // ---- left button ----
-        const bool left_go = left_enabled && base_ok
-            && (!hold_mode || (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0);
+        const bool left_go = left_enabled && GateLeft(base_ok,
+            (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0);
         if (left_go) {
             if (rand() % 100 < hit_chance) {
                 PostMessageA(target, WM_LBUTTONDOWN, MK_LBUTTON, 0);
@@ -198,7 +208,7 @@ static void ClickerThread()
                 PostMessageA(target, WM_LBUTTONUP, MK_LBUTTON, 0);
                 RecordClick(true);
 
-                if (blockhit && rand() % 100 < blockhit_chance) {
+                if (blockhit && GateBlockHit() && rand() % 100 < blockhit_chance) {
                     PostMessageA(target, WM_RBUTTONDOWN, MK_RBUTTON, 0);
                     precise_sleep(20);
                     PostMessageA(target, WM_RBUTTONUP, MK_RBUTTON, 0);
@@ -218,8 +228,8 @@ static void ClickerThread()
         }
 
         // ---- right button ----
-        const bool right_go = right_enabled && base_ok
-            && (!hold_mode || (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0);
+        const bool right_go = right_enabled && GateRight(base_ok,
+            (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0);
         if (right_go) {
             if (rand() % 100 < right_chance) {
                 PostMessageA(target, WM_RBUTTONDOWN, MK_RBUTTON, 0);
@@ -246,6 +256,79 @@ static void ClickerThread()
 
         precise_sleep(1);
     }
+}
+
+// ---------------------------------------------------------------------------
+// The mod link (managed mode).
+//
+// The companion Forge mod starts this exe with "--managed" when a server
+// loads and feeds one JSON line per state change over stdin:
+//
+//     {"gui":true,"bow":false,"held":"item.bow"}
+//
+// The mod NEVER clicks — this exe still does all of its own clicking, the
+// mod only reports what it can see inside the game:
+//   * "gui"  — any in-game GUI/screen is open (inventory, chest, villager,
+//              enderchest, chat, pause menu, ...) -> block every click;
+//   * "bow"  — the player is holding a bow -> hold all right-click output
+//              (the right autoclicker and Block Hit) so charging stays
+//              normal; left clicks are untouched;
+//   * "exit" — the game is closing -> shut down gracefully.
+// stdin EOF (game process gone, even after a crash) is a fallback exit.
+// ---------------------------------------------------------------------------
+static std::atomic<bool> g_exit_requested{false};
+static std::atomic<bool> g_mod_linked{false};
+
+// Look for "key" : true|false in a JSON-ish line; -1 when absent.
+static int ModJsonFlag(const std::string& line, const char* key)
+{
+    std::string needle = std::string("\"") + key + "\"";
+    const size_t p = line.find(needle);
+    if (p == std::string::npos) return -1;
+    const size_t colon = line.find(':', p + needle.size());
+    if (colon == std::string::npos) return -1;
+    size_t q = colon + 1;
+    while (q < line.size() && (line[q] == ' ' || line[q] == '\t')) q++;
+    if (line.compare(q, 4, "true") == 0)  return 1;
+    if (line.compare(q, 5, "false") == 0) return 0;
+    return -1;
+}
+
+static void ModLinkThread()
+{
+    HANDLE in = ::GetStdHandle(STD_INPUT_HANDLE);
+    if (in == nullptr || in == INVALID_HANDLE_VALUE) return;   // standalone start
+
+    std::string buf;
+    char chunk[512];
+    DWORD n = 0;
+    for (;;) {
+        if (!::ReadFile(in, chunk, sizeof(chunk), &n, nullptr) || n == 0)
+            break;                                   // EOF — the game went away
+        buf.append(chunk, chunk + (size_t)n);
+        size_t pos;
+        while ((pos = buf.find('\n')) != std::string::npos) {
+            const std::string line = buf.substr(0, pos);
+            buf.erase(0, pos + 1);
+            if (line.empty()) continue;
+
+            const int gui = ModJsonFlag(line, "gui");
+            const int bow = ModJsonFlag(line, "bow");
+            if (gui >= 0) mod_gui_open    = gui != 0;
+            if (bow >= 0) mod_holding_bow = bow != 0;
+            g_mod_linked = true;
+
+            const bool exit_cmd = (line == "exit") || (line.find("\"exit\"") != std::string::npos);
+            if (exit_cmd) {
+                g_mod_linked = false;
+                g_exit_requested = true;
+                return;
+            }
+        }
+    }
+    // EOF: the game closed (or crashed). Follow it down.
+    g_mod_linked = false;
+    g_exit_requested = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -428,6 +511,15 @@ static bool StartInTray(LPSTR cmdLine)
     return strstr(buf, "/tray") != nullptr || strstr(buf, "-tray") != nullptr;
 }
 
+// Managed mode: a game-side mod (or launcher) owns this process's lifetime.
+static bool StartManaged(LPSTR cmdLine)
+{
+    char buf[512] = {};
+    lstrcpynA(buf, cmdLine ? cmdLine : "", 512);
+    CharLowerBuffA(buf, lstrlenA(buf));
+    return strstr(buf, "managed") != nullptr;
+}
+
 // ---------------------------------------------------------------------------
 // The tray window — hidden message sink owning the icon.
 // ---------------------------------------------------------------------------
@@ -540,6 +632,28 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (g_pd3dDevice != nullptr && wParam != SIZE_MINIMIZED)
             ResetDevice();
         return 0;
+    case WM_NCHITTEST:
+        // Seamless frameless titlebar: the top band drags the window like a
+        // caption, except the reserved corner where the drawn min / X live.
+        // Everything else is client area — the glass canvas is the window.
+        if (ImGui::GetCurrentContext() != nullptr) {
+            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            ::ScreenToClient(hWnd, &pt);
+            if (pt.y >= 0 && pt.y < (LONG)lay::TB_H && pt.x < (LONG)(lay::CLIENT_W - lay::TB_CTRLS_W))
+                return HTCAPTION;
+        }
+        return HTCLIENT;
+    case WM_ENTERSIZEMOVE:
+    case WM_EXITSIZEMOVE:
+        // a caption drag swallowed the mouse — drop stale state so no ghost
+        // click/drag fires inside the UI when the cursor comes back
+        if (ImGui::GetCurrentContext() != nullptr) {
+            ImGuiIO& mio = ImGui::GetIO();
+            mio.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+            mio.AddMouseButtonEvent(0, false);
+            mio.AddMouseButtonEvent(1, false);
+        }
+        return 0;
     case WM_SYSCOMMAND:
         if ((wParam & 0xfff0) == SC_SCREENSAVE || (wParam & 0xfff0) == SC_MONITORPOWER)
             return 0;
@@ -585,6 +699,8 @@ static bool  HostMcFound(void*)           { return FindWindowA("LWJGL", nullptr)
 static bool  HostAutostartEnabled(void*)  { return AutostartEnabled(); }
 static bool  HostSetAutostart(void*, bool on) { return SetAutostart(on); }
 static const char* HostConfigPath(void*)  { static std::string p = ConfigPath(); return p.c_str(); }
+static void  HostMinimize(void*)          { if (g_hWnd) ::ShowWindow(g_hWnd, SW_MINIMIZE); }
+static void  HostCloseToTray(void*)       { window_hidden = true; }
 
 // ---------------------------------------------------------------------------
 // main
@@ -606,22 +722,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     }
 
     LoadConfig(ConfigPath());
+    const bool managed = StartManaged(lpCmdLine);
     if (StartInTray(lpCmdLine)) window_hidden = true;
     start_with_windows = AutostartEnabled();
 
-    // --- window: client area exactly the layout the UI was designed for ----
+    // --- window: frameless, client area exactly the layout the UI was
+    // --- designed for (the UI draws its own titlebar band)
     g_appIcon = CreateAppIcon();
     WNDCLASSEXW wc = { sizeof(wc), 0, WndProc, 0, 0, GetModuleHandleW(nullptr), g_appIcon,
                        nullptr, nullptr, nullptr, L" ", g_appIcon };
     ::RegisterClassExW(&wc);
 
-    RECT wr = { 0, 0, (LONG)lay::CLIENT_W, (LONG)lay::CLIENT_H };
-    ::AdjustWindowRect(&wr, WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE);
-    const int win_w = (int)(wr.right - wr.left);
-    const int win_h = (int)(wr.bottom - wr.top);
-    HWND hwnd = ::CreateWindowExW(0, L" ", L" ",
-                                  WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-                                  100, 100, win_w, win_h,
+    HWND hwnd = ::CreateWindowExW(0, L" ", L"Abaser Clicker",
+                                  WS_POPUP | WS_MINIMIZEBOX,
+                                  100, 100, (int)lay::CLIENT_W, (int)lay::CLIENT_H,
                                   nullptr, nullptr, wc.hInstance, nullptr);
     g_hWnd = hwnd;
     if (!CreateDeviceD3D(hwnd)) {
@@ -662,6 +776,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     std::thread clicker(ClickerThread);
     clicker.detach();
 
+    // --- mod link (managed mode only) ----------------------------------------
+    if (managed)
+        std::thread(ModLinkThread).detach();
+
     // --- tray ---------------------------------------------------------------
     if (CreateTrayWindow(wc.hInstance))
         TrayAddIcon();
@@ -679,9 +797,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     host.set_autostart     = &HostSetAutostart;
     host.config_path       = &HostConfigPath;
     host.poll_bind_key     = &PollBindKeyPlatform;
+    host.minimize          = &HostMinimize;
+    host.close_to_tray     = &HostCloseToTray;
     host.user              = nullptr;
 
     while (running) {
+        if (g_exit_requested) {          // the mod said exit, or the game closed
+            running = false;
+            break;
+        }
         if (::PeekMessageW(&msg, nullptr, 0U, 0U, PM_REMOVE)) {
             ::TranslateMessage(&msg);
             ::DispatchMessageW(&msg);
@@ -729,6 +853,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
         host.live_cps_left  = LiveCps(true);
         host.live_cps_right = LiveCps(false);
+        host.mod_linked      = g_mod_linked.load();
+        host.mod_gui_open    = mod_gui_open;
+        host.mod_holding_bow = mod_holding_bow;
 
         DrawUI(host, ABASER_VERSION);
 

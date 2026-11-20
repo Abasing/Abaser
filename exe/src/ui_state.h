@@ -60,6 +60,55 @@ struct AbaserStr {
 
 #define VSTR(s) ([]() { static AbaserStr<sizeof(s)> _v(s); return _v(); })()
 
+// --- theme colors (Discord-style) -------------------------------------------
+// Two colors, each stored as a plain 24-bit RGB integer ((R<<16)+(G<<8)+B),
+// exactly the way Discord stores profile theme_colors [primary, accent].
+// Everything else on screen derives from these two ints:
+//   * the window background is a vertical gradient of the primary
+//     (Discord's --profile-gradient-primary/secondary-color),
+//   * the interactive accent drives switches, sliders and highlights,
+//   * knob/glyph colors are picked by relative luminance so they stay
+//     readable on any color the user picks (Discord's luminance clamp).
+inline unsigned int theme_primary = 0xFF3899u;   // profile gradient base
+inline unsigned int theme_accent  = 0xFF3899u;   // interactive accent
+
+// legacy ImVec4 mirror of theme_accent (the old config key / engine colors)
+inline ImVec4 accent = ImVec4(1.00f, 0.22f, 0.55f, 1.00f);
+
+inline unsigned int RgbFromIm4(const ImVec4& c)
+{
+    const unsigned r = (unsigned)(ImClamp(c.x, 0.0f, 1.0f) * 255.0f + 0.5f);
+    const unsigned g = (unsigned)(ImClamp(c.y, 0.0f, 1.0f) * 255.0f + 0.5f);
+    const unsigned b = (unsigned)(ImClamp(c.z, 0.0f, 1.0f) * 255.0f + 0.5f);
+    return (r << 16) | (g << 8) | b;
+}
+inline ImVec4 Im4FromRgb(unsigned int rgb)
+{
+    return ImVec4(((rgb >> 16) & 0xFFu) / 255.0f,
+                  ((rgb >> 8)  & 0xFFu) / 255.0f,
+                  ( rgb        & 0xFFu) / 255.0f, 1.0f);
+}
+inline void SyncAccentFromTheme() { accent = Im4FromRgb(theme_accent); }
+
+inline ImVec4 ShadeColor(const ImVec4& c, float f)
+{
+    return ImVec4(ImClamp(c.x * f, 0.0f, 1.0f), ImClamp(c.y * f, 0.0f, 1.0f), ImClamp(c.z * f, 0.0f, 1.0f), c.w);
+}
+inline ImVec4 MixColor(const ImVec4& a, const ImVec4& b, float t)
+{
+    return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t);
+}
+// relative luminance (WCAG-ish) + the Discord trick: pick dark or light text
+// for anything drawn on a user color so it is readable on any theme
+inline float Luma01(const ImVec4& c) { return 0.2126f * c.x + 0.7152f * c.y + 0.0722f * c.z; }
+inline ImVec4 OnColor(const ImVec4& bg) { return Luma01(bg) > 0.55f ? ImVec4(0.10f, 0.11f, 0.14f, 1.0f) : ImVec4(1.0f, 1.0f, 1.0f, 1.0f); }
+
+// --- live state from the companion mod ---------------------------------------
+// The mod feeds this over the stdin link (see main.cpp ModLinkThread). When
+// the exe runs standalone, everything stays false — the gates are wide open.
+inline bool mod_gui_open    = false;   // any in-game GUI/screen is open
+inline bool mod_holding_bow = false;   // the player is holding a bow
+
 // --- slider limits ----------------------------------------------------------
 static const float CPS_LO = 1.0f,  CPS_HI = 25.0f;
 static const int   CHANCE_LO = 1,  CHANCE_HI = 100;
@@ -79,14 +128,32 @@ inline int    blockhit_chance  = 6;
 inline bool   hold_mode        = true;   // click only while the physical button is held
 inline bool   require_focus    = true;   // no clicks into an unfocused game window
 inline bool   legacy_timing    = false;  // reproduce the classic's ~2x CPS math
-inline bool   other_background = true;
-inline ImVec4 accent           = ImVec4(1.00f, 0.22f, 0.55f, 1.00f);  // iOS pink
+inline bool   other_background = true;   // "dim backdrop" — darkens the gradient
 inline int    hide_bind        = 45;     // VK_INSERT
 
 inline bool   left_enabled     = false;
 inline bool   right_enabled    = false;
 inline bool   window_hidden    = false;
 inline int    g_tab            = 0;
+
+// The click gates — the single policy both the engine and the simulator test:
+//   * an open GUI blocks EVERYTHING (inventory, chest, villager, enderchest,
+//     chat, pause menu — any screen at all),
+//   * a drawn bow blocks every RIGHT-click emission (the right autoclicker
+//     and Block Hit's sword-block taps) so charging feels normal; left clicks
+//     are untouched.
+inline bool GateLeft(bool base_ok, bool hold_key_down)
+{
+    return base_ok && !mod_gui_open && (!hold_mode || hold_key_down);
+}
+inline bool GateRight(bool base_ok, bool hold_key_down)
+{
+    return base_ok && !mod_gui_open && !mod_holding_bow && (!hold_mode || hold_key_down);
+}
+inline bool GateBlockHit()
+{
+    return !mod_gui_open && !mod_holding_bow;
+}
 
 inline unsigned long long g_left_total  = 0;   // lifetime counters (engine-side)
 inline unsigned long long g_right_total = 0;
@@ -235,7 +302,9 @@ inline void ResetDefaults()
     require_focus    = true;
     legacy_timing    = false;
     other_background = true;
-    accent           = ImVec4(1.00f, 0.22f, 0.55f, 1.00f);
+    theme_primary    = 0xFF3899u;
+    theme_accent     = 0xFF3899u;
+    SyncAccentFromTheme();
     left_enabled     = false;
     right_enabled    = false;
 }
@@ -260,10 +329,15 @@ inline void ApplyConfigKey(const std::string& key, const std::string& val)
     else if (key == "other_background") other_background = (val == "true" || val == "1");
     else if (key == "left_enabled")     left_enabled     = (val == "true" || val == "1");
     else if (key == "right_enabled")    right_enabled    = (val == "true" || val == "1");
+    else if (key == "theme_primary")    { theme_primary = (unsigned int)strtoul(v, nullptr, 10); SyncAccentFromTheme(); }
+    else if (key == "theme_accent")     { theme_accent  = (unsigned int)strtoul(v, nullptr, 10); SyncAccentFromTheme(); }
     else if (key == "accent") {
+        // legacy per-float key (pre-theme builds) — feeds the accent int
         float r = 1.0f, g = 0.22f, b = 0.55f, a = 1.0f;
-        if (sscanf(v, "%f %f %f %f", &r, &g, &b, &a) == 4)
+        if (sscanf(v, "%f %f %f %f", &r, &g, &b, &a) == 4) {
+            theme_accent = RgbFromIm4(ImVec4(r, g, b, 1.0f));
             accent = ImVec4(r, g, b, a);
+        }
     }
 }
 
@@ -305,7 +379,8 @@ inline bool SaveConfig(const std::string& path)
     out << "other_background = " << (other_background ? "true" : "false") << "\n";
     out << "left_enabled = "     << (left_enabled ? "true" : "false")    << "\n";
     out << "right_enabled = "    << (right_enabled ? "true" : "false")   << "\n";
-    out << "accent = " << accent.x << " " << accent.y << " "
-                       << accent.z << " " << accent.w << "\n";
+    out << "# theme colors, stored like Discord: ((R<<16)+(G<<8)+B)\n";
+    out << "theme_primary = "    << theme_primary    << "\n";
+    out << "theme_accent = "     << theme_accent     << "\n";
     return true;
 }
