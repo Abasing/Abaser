@@ -7,7 +7,7 @@ and releases them together, automatically, on every push to `develop`:
 | Deliverable | What it is |
 |---|---|
 | **`Abaser-Clicker-<version>-win64.exe`** | The auto-clicker. Win32 + Dear ImGui + DirectX 9, one file, no runtimes, no install. |
-| `Abaser-1.8.8-<version>.jar` | Companion mod shell — loads silently with Forge, keeps the Abaser name in-game, answers `/abaser`. **It does not click.** |
+| `Abaser-1.8.8-<version>.jar` | Companion mod — loads with Forge, starts the exe with your server, feeds it live game state, closes it with the game. **It does not click.** |
 
 ## Abaser Clicker (the exe)
 
@@ -23,8 +23,8 @@ no focus games, no misclicks into your browser.
 | Hide window | **INSERT** | Hide/show the Abaser window (clickers keep running) |
 
 Everything is in the UI: randomized CPS min/max per side, hit chance,
-Block Hit (sword-block taps), accent color, rebindable keys. Settings
-persist in `abaser.ini` next to the exe. The window parks in the
+Block Hit (sword-block taps), the two-color theme, rebindable keys.
+Settings persist in `abaser.ini` next to the exe. The window parks in the
 **system tray** (X / INSERT / tray-click); the tray menu can arm/disarm
 the clickers, toggle **Start with Windows** (a per-user Run key, launches
 straight into the tray), and exit.
@@ -45,28 +45,58 @@ Improvements over the classic external clicker it descends from:
   exits; a second launch just summons the first
 - **start with Windows** — one checkbox (Settings tab or tray menu) writes
   a per-user Run entry that launches it straight into the tray
+- **seamless glass UI** — a frameless window (no native title bar): the
+  same glass canvas runs under the whole top band, with drawn minimize /
+  close buttons and a drag-anywhere band
+- **Discord-style theming** — a theme is two plain integers
+  (`theme_primary`, `theme_accent`, stored as `(R<<16)+(G<<8)+B`, exactly
+  like Discord profile `theme_colors`); the background is a vertical
+  gradient of the primary, controls take the accent, and knob/glyph colors
+  are picked by relative luminance so any color stays readable
 
-**Deliberately absent:** anything that needs game-internal state — detecting
-open inventories/GUIs, "don't click while holding a bow", "sword only".
-An external executable cannot see inside the game process, so those features
-are not pretended. (They previously existed in the in-game mod; that mod no
-longer clicks — see below.)
+## The mod link — game state the exe cannot see alone
+
+An external program can never see inside the game process on its own. The
+companion mod closes that gap with a stdin link:
+
+- when a **server/world loads**, the mod starts
+  `AbaserClicker.exe --managed /tray` — it appears directly in the system
+  tray (game folder or `mods/` folder, or `$ABASER_EXE`);
+- on every change (plus a 2 s heartbeat) the mod writes one JSON line to
+  the exe's stdin: `{"gui":true,"bow":false,"held":"item.bow"}`;
+- the exe's click gates (shared code, regression-tested in the simulator):
+  * **any open GUI** — inventory, chest, villager, enderchest, chat, pause
+    menu, everything — blocks **all** clicks;
+  * **holding a bow** blocks every right-click emission (the right
+    autoclicker *and* Block Hit taps) so charging works normally; left
+    clicks keep going;
+- closing the game closes the clicker: the mod says `{"exit":true}` and
+  destroys the process, and the exe also exits on stdin EOF — a crashed
+  game cannot orphan it.
+
+The clicks still come from the exe itself, from its own engine and its own
+hotkeys, exactly as before — the mod never generates, translates or
+forwards a single click; it only reports what it can see.
+
+Without the mod, the exe behaves exactly as it always has (standalone,
+tray, hotkeys); without the exe, the mod just sits there — it cannot click
+anything.
 
 See `exe/README.md` for the full details.
 
 ## The companion mod (the jar)
 
 The 1.8.8 Forge mod in this repository used to contain the auto-clicker.
-It doesn't anymore — the clicking moved to the exe, and the mod is now a
-deliberately featureless shell: it loads with the game, keeps the name
-loadable, and `/abaser` tells you where the clicker went. Install it or
-don't; the exe works either way.
+It doesn't anymore — the clicking lives in the exe, and the mod's whole job
+is the **mod link** above: start the exe with the server, feed it game
+state over stdin, stop it when the game closes. `/abaser` in chat explains
+the wiring.
 
 ## Layout
 
 ```
 exe/            the standalone clicker (C++: Win32 + Dear ImGui + DX9)
-src/            the companion mod shell (Java: Forge 1.8.8)
+src/            the companion mod (Java: Forge 1.8.8) — the mod link
 legacy/         the recovered classic clicker this descends from
                 (frozen reference: original source reconstruction + notes)
 .github/        the release pipeline

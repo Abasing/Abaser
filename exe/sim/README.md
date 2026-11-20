@@ -21,8 +21,11 @@ asserts that interacting **changes the underlying state**.
 
 toggles arm/disarm both clickers · segmented tabs switch · slider drags
 change float and int values · activation switches flip · bind capture
-starts, accepts a key, and cancels · accent swatches propagate to sliders,
-switches and the glow · backdrop shade flips · counters reset · the MC /
+starts, accepts a key, and cancels · theme presets set the two color ints
+and re-theme the background gradient · the full click-gate truth table
+(open GUI blocks everything, drawn bow blocks right only, no game window
+blocks everything) · the drawn minimize / close buttons fire the host
+callbacks · the Dim backdrop toggle flips · counters reset · the MC /
 no-game chip switches.
 
 ## Run
