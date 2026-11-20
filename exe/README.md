@@ -52,18 +52,41 @@ you press your toggle key. Unchecking removes the entry again; deleting
 the registry value yourself is detected at the next launch. On Windows
 shutdown/logoff the settings are still saved on the way out.
 
-## Tabs
+## The UI
 
-- **Clicker** — left/right enable + bind, CPS min/max sliders (randomized
-  every click), hit chance per side, activation mode (hold-to-click like the
-  classic, or always), focus gate, legacy timing toggle. Live CPS in the
-  status strip.
-- **Misc** — Block Hit (right-click sword-block taps during left clicks,
-  with its own chance), lifetime click counters.
+Apple **Liquid Glass** style: one translucent canvas (ambient gradient with
+two soft accent glows) under frosted glass cards — 1 px light borders, top
+specular highlights, 16 px continuous radii — with iOS-style controls:
+toggle switches, one-row sliders, a segmented tab control, status chips and
+accent swatches. Everything renders through `src/ui.cpp`, shared verbatim
+with the headless simulator (see `sim/README.md`).
+
+Tabs:
+
+- **Clicker** — left/right glass cards (enable switch, hotkey pill, CPS
+  max/min, chance) + an Activation card (hold-to-click, focus gate, legacy
+  timing). Live CPS in the footer.
+- **Misc** — Block Hit (sword-block taps during left clicks, with its own
+  chance) and lifetime click counters.
 - **Configs** — the classic said NOTHING YET; this one actually saves:
   `abaser.ini` next to the exe, loaded at startup, saved on exit.
-- **Settings** — accent color (the whole theme derives from it), background
-  shade, FPS, hide-window bind, Start with Windows.
+- **Settings** — accent swatches + custom picker, backdrop shade,
+  hide-window bind, Start with Windows, about/FPS.
+
+The theme still derives its tones from the accent color, which stays fully
+user-configurable (six swatches or any custom color).
+
+## The old click bug
+
+Before this redesign the UI stacked four overlapping Dear ImGui root
+windows, the topmost being an 800x800 "DrawList" overlay used to draw the
+sidebar separator. Dear ImGui's hover search does not skip `SkipItems`
+windows — so the overlay was *always* the hovered window, `ItemHoverable()`
+failed for every widget in every other window, and **no click anywhere in
+the UI did anything**. The overlay is gone (the UI is one root window now)
+and the behavior is regression-tested in the simulator: 20 interactions
+(toggles, tabs, slider drags, bind capture, swatches, counters) all assert
+the state actually changes.
 
 ## Improvements over the classic
 
@@ -99,6 +122,20 @@ cmake -S exe -B build -DCMAKE_TOOLCHAIN_FILE=exe/mingw-toolchain.cmake \
 Output: `build/AbaserClicker.exe` (or `build/Release/AbaserClicker.exe`
 with MSVC multi-config generators). Dear ImGui v1.91.5 is vendored in
 `third_party/imgui` — no external dependencies at all.
+
+## Testing the UI (no Windows needed)
+
+`sim/` builds the real `src/ui.cpp` on Linux with a software rasterizer and
+runs 20 scripted interactions against it, saving screenshots of every tab
+and state:
+
+```
+exe/sim/build_sim.sh
+```
+
+If a click works there, it works in the exe — same code, same Dear ImGui
+version, same layout constants (shared in `ui.h` so clicks and pixels can
+never drift apart).
 
 The embedded Ubuntu font travels in `src/abaser_assets.h` inside the
 classic's own "57BC" compressed container; to regenerate it from a changed

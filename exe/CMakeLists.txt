@@ -22,6 +22,7 @@ set(ABASER_VERSION "dev" CACHE STRING "Version string shown in the UI")
 
 add_executable(AbaserClicker WIN32
     src/main.cpp
+    src/ui.cpp
     third_party/imgui/imgui.cpp
     third_party/imgui/imgui_draw.cpp
     third_party/imgui/imgui_tables.cpp
