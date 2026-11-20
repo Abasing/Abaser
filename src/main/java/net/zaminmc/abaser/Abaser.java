@@ -25,7 +25,7 @@ public class Abaser {
 
     public static final String MODID   = "abaser";
     public static final String NAME    = "Abaser";
-    public static final String VERSION = "2.1-dev.7";
+    public static final String VERSION = "2.1-dev.8";
 
     public static Logger logger;
 
