@@ -156,8 +156,8 @@ void StyleAbaserGlass()
     s.ItemInnerSpacing  = ImVec2(6, 6);
     s.WindowRounding    = 0.0f;
     s.WindowBorderSize  = 0.0f;
-    s.FrameRounding     = 10.0f;
-    s.PopupRounding     = 14.0f;
+    s.FrameRounding     = 8.0f;
+    s.PopupRounding     = 10.0f;
     s.PopupBorderSize   = 1.0f;
     s.FrameBorderSize   = 0.0f;
     s.GrabRounding      = 6.0f;
@@ -238,14 +238,19 @@ static bool GlassToggle(const char* label, bool* v, const ImRect& row, const cha
     *t = target + (*t - target) * 0.55f;
     const float kn = *t;
 
-    // track: OFF is clearly visible (the old build's 9% white vanished on the
-    // card and left a lonely floating knob — the "off-center button" look)
-    const ImVec4 track_off = ImVec4(1, 1, 1, hovered ? 0.17f : 0.13f);
-    const ImVec4 track = *v ? accent : track_off;
+    // track: OFF must be clearly visible — a dark trough with a light rim
+    // (the old 13%-white track vanished on the glass card and left a lonely
+    // floating knob, which read as a broken off-center button)
     const float round_t = lay::SW_H * 0.5f;
-    dl->AddRectFilled(sw.Min, sw.Max, A(track), round_t);
-    dl->AddRect(ImVec2(sw.Min.x + 0.5f, sw.Min.y + 0.5f), ImVec2(sw.Max.x - 0.5f, sw.Max.y - 0.5f),
-                AA(WHITE, *v ? 0.28f : (hovered ? 0.30f : 0.20f)), round_t, 0, 1.0f);
+    if (*v) {
+        dl->AddRectFilled(sw.Min, sw.Max, A(accent), round_t);
+        dl->AddRect(ImVec2(sw.Min.x + 0.5f, sw.Min.y + 0.5f), ImVec2(sw.Max.x - 0.5f, sw.Max.y - 0.5f),
+                    AA(WHITE, 0.30f), round_t, 0, 1.0f);
+    } else {
+        dl->AddRectFilled(sw.Min, sw.Max, A(ImVec4(0, 0, 0, hovered ? 0.38f : 0.30f)), round_t);
+        dl->AddRect(ImVec2(sw.Min.x + 0.5f, sw.Min.y + 0.5f), ImVec2(sw.Max.x - 0.5f, sw.Max.y - 0.5f),
+                    AA(WHITE, hovered ? 0.26f : 0.18f), round_t, 0, 1.0f);
+    }
     // knob — dark or white by luminance, so it reads on light accents too
     const float kd = lay::SW_H - 6.0f;
     const float kx = sw.Min.x + 3.0f + kn * (lay::SW_W - kd - 6.0f);
@@ -293,7 +298,9 @@ static bool GlassSliderCore(const char* id_salt, const char* label, const Slider
     if (is_int) snprintf(vbuf, sizeof(vbuf), fmt, (int)(cur + 0.5f));
     else        snprintf(vbuf, sizeof(vbuf), fmt, cur);
     const ImVec2 vs = TextSizeS(vbuf);
-    const bool dragging = ImGui::GetStateStorage()->GetBoolRef(id, false);
+    // GetBoolRef returns bool* — dereference it, or the pointer-to-bool
+    // conversion makes every frame read as "dragging" (accent-colored values)
+    const bool dragging = ImGui::GetStateStorage()->GetBool(id, false);
     AddTextS(dl, ImVec2(row.Max.x - vs.x, row.Min.y), A(dragging ? accent : TEXT_HI), vbuf);
 
     // track row (grab area)
@@ -420,26 +427,26 @@ static bool BindPill(const char* label, int* bind, int which, const ImRect& row)
 static void StatusChip(ImDrawList* dl, float right_x, float y, const ImVec4& dot, const char* txt, ImVec2* cursor_out)
 {
     const ImVec2 ts = TextSizeS(txt);
-    const float h = 22.0f;
-    const float w = ts.x + 8.0f + 8.0f + 8.0f;
+    const float h = lay::CHIP_H;
+    const float w = ts.x + 30.0f;                 // 12 dot-inset + dot + 8 + text + 8 rim
     const float x = right_x - w;
     dl->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + h), AA(WHITE, 0.075f), h * 0.5f);
     dl->AddRect(ImVec2(x + 0.5f, y + 0.5f), ImVec2(x + w - 0.5f, y + h - 0.5f), AA(WHITE, 0.12f), h * 0.5f, 0, 1.0f);
-    dl->AddCircleFilled(ImVec2(x + 13.0f, y + h * 0.5f), 3.0f, A(dot), 12);
-    AddTextS(dl, ImVec2(x + 22.0f, y + (h - ts.y) * 0.5f), A(ImVec4(0.85f, 0.88f, 0.94f, 1.0f)), txt);
+    dl->AddCircleFilled(ImVec2(x + 12.0f, y + h * 0.5f), 3.0f, A(dot), 12);
+    AddTextS(dl, ImVec2(x + 21.0f, y + (h - ts.y) * 0.5f), A(ImVec4(0.85f, 0.88f, 0.94f, 1.0f)), txt);
     if (cursor_out) *cursor_out = ImVec2(x - 6.0f, y);
 }
 
 // Card with small uppercase title; returns content box.
 static ImRect Card(ImDrawList* dl, const ImRect& r, const char* title)
 {
-    AddGlassPanel(dl, r, 16.0f, CARD_FILL);
+    AddGlassPanel(dl, r, lay::CARD_R, CARD_FILL);
     char up[64];
     size_t n = 0;
     for (; n < 63 && title[n]; n++)
         up[n] = (char)((title[n] >= 'a' && title[n] <= 'z') ? title[n] - 32 : title[n]);
     up[n] = 0;
-    AddTextS(dl, ImVec2(r.Min.x + 14.0f, r.Min.y + 11.0f), AA(TEXT_MUT, 0.85f), up);
+    AddTextS(dl, ImVec2(r.Min.x + 12.0f, r.Min.y + 9.0f), AA(TEXT_MUT, 0.85f), up);
     return lay::CardContent(r);
 }
 
@@ -512,7 +519,7 @@ void DrawUI(const AbaserUIHost& host, const char* version)
                     A(TEXT_HI), VSTR("Abaser Clicker"));
 
         // status chips, right-aligned in front of the window buttons
-        ImVec2 cur(lay::TBChipRight(), (lay::TB_H - 22.0f) * 0.5f);
+        ImVec2 cur(lay::TBChipRight(), (lay::TB_H - lay::CHIP_H) * 0.5f);
         const bool link_ok = host.mod_linked;
         if (link_ok) {
             StatusChip(dl, cur.x, cur.y, OK_GRN, VSTR("Mod"), &cur);
@@ -577,22 +584,21 @@ void DrawUI(const AbaserUIHost& host, const char* version)
             if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) g_tab = i;
             if (active) {
                 const ImRect pill(sr.Min.x + 3, sr.Min.y + 3, sr.Max.x - 3, sr.Max.y - 3);
-                // active pill: white glass with a touch of the accent — stays
-                // premium on every theme instead of a flat gray slab
-                dl->AddRectFilled(pill.Min, pill.Max, AA(WHITE, 0.14f), pill.GetHeight() * 0.5f);
-                dl->AddRectFilled(pill.Min, pill.Max, AA(accent, 0.16f), pill.GetHeight() * 0.5f);
+                // active pill: SOLID accent with readable on-color text — the
+                // clearest premium statement of "you are here" on any theme
+                dl->AddRectFilled(pill.Min, pill.Max, AA(accent, 0.92f), pill.GetHeight() * 0.5f);
                 dl->AddRect(ImVec2(pill.Min.x + 0.5f, pill.Min.y + 0.5f), ImVec2(pill.Max.x - 0.5f, pill.Max.y - 0.5f),
-                            AA(WHITE, 0.22f), pill.GetHeight() * 0.5f, 0, 1.0f);
-                dl->AddLine(ImVec2(pill.Min.x + pill.GetWidth() * 0.25f, pill.Min.y + 1.5f),
-                            ImVec2(pill.Max.x - pill.GetWidth() * 0.25f, pill.Min.y + 1.5f),
-                            AA(accent, 0.55f), 1.0f);
+                            AA(WHITE, 0.30f), pill.GetHeight() * 0.5f, 0, 1.0f);
+                dl->AddLine(ImVec2(pill.Min.x + pill.GetWidth() * 0.3f, pill.Min.y + 1.5f),
+                            ImVec2(pill.Max.x - pill.GetWidth() * 0.3f, pill.Min.y + 1.5f),
+                            AA(WHITE, 0.35f), 1.0f);
             } else if (hovered) {
                 dl->AddRectFilled(sr.Min, sr.Max, AA(WHITE, 0.05f), sr.GetHeight() * 0.5f - 2.0f);
             }
             ImFont* f = g_fonts.body;
             const ImVec2 ts = f->CalcTextSizeA(f->FontSize, FLT_MAX, 0.0f, names[i]);
             dl->AddText(ImVec2((sr.Min.x + sr.Max.x) * 0.5f - ts.x * 0.5f, CenterTextY(sr, ts.y)),
-                        A(active ? TEXT_HI : (hovered ? ImVec4(0.82f, 0.85f, 0.92f, 1.0f) : TEXT_MUT)), names[i]);
+                        A(active ? OnColor(accent) : (hovered ? ImVec4(0.82f, 0.85f, 0.92f, 1.0f) : TEXT_MUT)), names[i]);
         }
     }
 
@@ -602,10 +608,10 @@ void DrawUI(const AbaserUIHost& host, const char* version)
         if (left_min_cps >= left_max_cps)  left_min_cps  = left_max_cps - 0.5f;
         if (right_min_cps >= right_max_cps) right_min_cps = right_max_cps - 0.5f;
 
-        // two glass cards, left & right clicker — each a proper panel now
+        // two glass cards, left & right clicker — sized to their content
         const ImRect lc = lay::LeftCard(), rc = lay::RightCard();
-        AddGlassPanel(dl, lc, 16.0f, CARD_FILL);
-        AddGlassPanel(dl, rc, 16.0f, CARD_FILL);
+        AddGlassPanel(dl, lc, lay::CARD_R, CARD_FILL);
+        AddGlassPanel(dl, rc, lay::CARD_R, CARD_FILL);
         {
             const ImRect row = lay::SideToggle(lc);
             GlassToggle(VSTR("Left clicker"), &left_enabled, row);
@@ -642,10 +648,10 @@ void DrawUI(const AbaserUIHost& host, const char* version)
     else if (g_tab == 1) {
         const ImRect bc = lay::BlockCard();
         Card(dl, bc, VSTR("Block hit"));
-        GlassToggle(VSTR("Block Hit"), &blockhit, lay::BlockToggle(),
+        GlassToggle(VSTR("Enabled"), &blockhit, lay::BlockToggle(),
                     VSTR("Sword-block taps ride along with left clicks."));
         GlassSliderI("bh_ch", VSTR("Chance"), &blockhit_chance, BH_LO, BH_HI, "%d%%", lay::BlockSlider());
-        AddTextS(dl, ImVec2(lay::MARGIN + 14, lay::BlockNoteY()), A(TEXT_DIM),
+        AddTextS(dl, ImVec2(lay::MARGIN + 12, lay::BlockNoteY()), A(TEXT_DIM),
                  VSTR("Note: applies to the left clicker only."));
 
         const ImRect sc = lay::StatsCard();
@@ -654,11 +660,21 @@ void DrawUI(const AbaserUIHost& host, const char* version)
             std::string l = FormatCount(g_left_total);
             std::string r = FormatCount(g_right_total);
             ImFont* tf = g_fonts.title;
-            dl->AddText(g_fonts.title, tf->FontSize, ImVec2(sc.Min.x + 14, sc.Min.y + 44.0f), A(TEXT_HI), l.c_str());
-            AddTextS(dl, ImVec2(sc.Min.x + 14, sc.Min.y + 44.0f + tf->FontSize + 4.0f), A(TEXT_MUT), VSTR("left clicks"));
-            dl->AddText(g_fonts.title, tf->FontSize, ImVec2(sc.Min.x + 160, sc.Min.y + 44.0f), A(TEXT_HI), r.c_str());
-            AddTextS(dl, ImVec2(sc.Min.x + 160, sc.Min.y + 44.0f + tf->FontSize + 4.0f), A(TEXT_MUT), VSTR("right clicks"));
-            if (GlassButtonPill(VSTR("Reset counters"), lay::StatsResetBtn())) {
+            // two columns, each number + caption pair centered in its half
+            const float half = sc.GetWidth() * 0.5f;
+            const ImVec2 ls = tf->CalcTextSizeA(tf->FontSize, FLT_MAX, 0.0f, l.c_str());
+            const ImVec2 rs = tf->CalcTextSizeA(tf->FontSize, FLT_MAX, 0.0f, r.c_str());
+            const float num_y = sc.Min.y + 34.0f;
+            const float cap_y = num_y + tf->FontSize + 5.0f;
+            dl->AddText(g_fonts.title, tf->FontSize,
+                        ImVec2(sc.Min.x + half * 0.5f - ls.x * 0.5f, num_y), A(TEXT_HI), l.c_str());
+            AddTextS(dl, ImVec2(sc.Min.x + half * 0.5f - TextSizeS(VSTR("left clicks")).x * 0.5f, cap_y),
+                     A(TEXT_MUT), VSTR("left clicks"));
+            dl->AddText(g_fonts.title, tf->FontSize,
+                        ImVec2(sc.Min.x + half * 1.5f - rs.x * 0.5f, num_y), A(TEXT_HI), r.c_str());
+            AddTextS(dl, ImVec2(sc.Min.x + half * 1.5f - TextSizeS(VSTR("right clicks")).x * 0.5f, cap_y),
+                     A(TEXT_MUT), VSTR("right clicks"));
+            if (GlassButtonPill(VSTR("Reset counters"), lay::StatsResetBtn(), true)) {
                 g_left_total = 0;
                 g_right_total = 0;
             }
@@ -667,10 +683,18 @@ void DrawUI(const AbaserUIHost& host, const char* version)
     else if (g_tab == 2) {
         const ImRect cc = lay::ConfigCard();
         Card(dl, cc, VSTR("Config file"));
-        AddTextS(dl, ImVec2(cc.Min.x, lay::ConfigFileY()), A(TEXT_MUT), VSTR("File"));
-        AddTextS(dl, ImVec2(cc.Min.x + 44.0f, lay::ConfigFileY()),
+        const ImRect content = lay::CardContent(cc);
+        // everything sits INSIDE the card's content box (the old build drew
+        // the file row and the status line at the raw card edge — broken look)
+        const char* file_lbl = VSTR("File");
+        const ImVec2 fls = TextSizeS(file_lbl);
+        const float file_cy = CenterTextY(ImRect(content.Min.x, lay::ConfigFileY(), content.Max.x,
+                                                 lay::ConfigFileY() + 20.0f), fls.y);
+        AddTextS(dl, ImVec2(content.Min.x, file_cy), A(TEXT_MUT), file_lbl);
+        AddTextS(dl, ImVec2(content.Min.x + fls.x + 10.0f, file_cy),
                  A(ImVec4(0.80f, 0.83f, 0.90f, 1.0f)),
-                 Ellipsize(host.config_path(host.user), cc.Max.x - cc.Min.x - 44.0f).c_str());
+                 Ellipsize(host.config_path(host.user),
+                           content.Max.x - content.Min.x - fls.x - 10.0f).c_str());
 
         const ImRect row = lay::ConfigBtnRow();
         const float bw = 150.0f, gap = 10.0f;
@@ -687,8 +711,8 @@ void DrawUI(const AbaserUIHost& host, const char* version)
             ResetDefaults();
             snprintf(g_config_status, sizeof(g_config_status), "defaults restored (not saved yet)");
         }
-        ImGui::SetCursorScreenPos(ImVec2(cc.Min.x, lay::ConfigStatusY()));
-        ImGui::PushTextWrapPos(cc.Max.x);
+        ImGui::SetCursorScreenPos(ImVec2(content.Min.x, lay::ConfigStatusY()));
+        ImGui::PushTextWrapPos(content.Max.x);
         ImGui::TextDisabled("%s", g_config_status);
         ImGui::PopTextWrapPos();
     }
@@ -727,11 +751,11 @@ void DrawUI(const AbaserUIHost& host, const char* version)
                 const ImVec4 prc = Im4FromRgb(presets[i][0]);
                 if (selected)
                     dl->AddRectFilled(ImVec2(pr.Min.x - 2.5f, pr.Min.y - 2.5f), ImVec2(pr.Max.x + 2.5f, pr.Max.y + 2.5f),
-                                      A(WHITE), 10.0f);
+                                      A(WHITE), 9.0f);
                 else if (ImGui::IsItemHovered())
                     dl->AddRectFilled(ImVec2(pr.Min.x - 1.5f, pr.Min.y - 1.5f), ImVec2(pr.Max.x + 1.5f, pr.Max.y + 1.5f),
-                                      AA(WHITE, 0.40f), 9.0f);
-                dl->AddRectFilled(pr.Min, pr.Max, AA(WHITE, 0.30f), 8.0f);
+                                      AA(WHITE, 0.40f), 8.0f);
+                dl->AddRectFilled(pr.Min, pr.Max, AA(WHITE, 0.30f), 7.0f);
                 const ImVec2 gmin(pr.Min.x + 1.0f, pr.Min.y + 1.0f), gmax(pr.Max.x - 1.0f, pr.Max.y - 1.0f);
                 dl->AddRectFilledMultiColor(gmin, gmax, A(prc), A(prc),
                                             A(ShadeColor(prc, 0.42f)), A(ShadeColor(prc, 0.42f)));
@@ -744,7 +768,7 @@ void DrawUI(const AbaserUIHost& host, const char* version)
                 const ImVec4 pc = Im4FromRgb(theme_primary);
                 float prim[3] = { pc.x, pc.y, pc.z };
                 ImGui::SetCursorScreenPos(psw.Min);
-                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 9.0f);
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 7.0f);
                 ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 4));
                 ImGui::PushStyleColor(ImGuiCol_Button, pc);
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, pc);
@@ -767,7 +791,7 @@ void DrawUI(const AbaserUIHost& host, const char* version)
                 const ImVec4 ac = Im4FromRgb(theme_accent);
                 float acc[3] = { ac.x, ac.y, ac.z };
                 ImGui::SetCursorScreenPos(asw.Min);
-                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 9.0f);
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 7.0f);
                 ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 4));
                 ImGui::PushStyleColor(ImGuiCol_Button, ac);
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ac);
@@ -792,8 +816,13 @@ void DrawUI(const AbaserUIHost& host, const char* version)
         GlassToggle(VSTR("Dim backdrop"), &other_background, lay::PrefsRow(pc, 0),
                     VSTR("Darkens the theme gradient behind the glass."));
         BindPill("hide", &hide_bind, BIND_HIDE, lay::PrefsRow(pc, 1));
-        AddTextS(dl, ImVec2(pc.Min.x + 14, CenterTextY(lay::PrefsRow(pc, 1), TextSizeS(VSTR("Hide window")).y)),
-                 A(TEXT_MUT), VSTR("Hide window"));
+        // body font + same color as the toggle labels — the three rows read
+        // as one consistent list
+        {
+            ImFont* f = g_fonts.body;
+            const ImRect row = lay::PrefsRow(pc, 1);
+            dl->AddText(f, f->FontSize, ImVec2(row.Min.x, CenterTextY(row, f->FontSize)), A(TEXT_HI), VSTR("Hide window"));
+        }
         {
             const ImRect row = lay::PrefsRow(pc, 2);
             const bool was_on = host.autostart_enabled(host.user);
@@ -813,12 +842,19 @@ void DrawUI(const AbaserUIHost& host, const char* version)
         }
 
         const ImRect ab = lay::AboutCard();
-        Card(dl, ab, VSTR("About"));
-        dl->AddText(ImVec2(ab.Min.x + 14, ab.Min.y + 30.0f), A(TEXT_HI), VSTR("Abaser Clicker"));
-        AddTextS(dl, ImVec2(ab.Min.x + 14, ab.Min.y + 52.0f), A(TEXT_MUT), version);
+        // no uppercase card title here — the card IS the about; name + version
+        // centered as one block, FPS right-aligned on the version line
+        AddGlassPanel(dl, ab, lay::CARD_R, CARD_FILL);
+        const ImRect content = lay::CardContent(ab);
+        ImFont* bf = g_fonts.body;
+        const float name_h = bf->FontSize;
+        const float block_h = name_h + 4.0f + g_fonts.small->FontSize;
+        const float y0 = ab.Min.y + (ab.GetHeight() - block_h) * 0.5f;
+        dl->AddText(bf, name_h, ImVec2(content.Min.x, y0), A(TEXT_HI), VSTR("Abaser Clicker"));
+        AddTextS(dl, ImVec2(content.Min.x, y0 + name_h + 4.0f), A(TEXT_MUT), version);
         char fps[64];
         snprintf(fps, sizeof(fps), "%.1f FPS", io.Framerate);
-        AddTextS(dl, ImVec2(ab.Max.x - 14.0f - TextSizeS(fps).x, ab.Min.y + 52.0f), A(TEXT_MUT), fps);
+        AddTextS(dl, ImVec2(content.Max.x - TextSizeS(fps).x, y0 + name_h + 4.0f), A(TEXT_MUT), fps);
     }
 
     // ---- footer ---------------------------------------------------------------

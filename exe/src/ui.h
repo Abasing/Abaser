@@ -75,7 +75,8 @@ namespace lay
 {
 constexpr float CLIENT_W = 560.0f;
 constexpr float CLIENT_H = 505.0f;
-constexpr float MARGIN   = 16.0f;
+constexpr float MARGIN   = 14.0f;
+constexpr float CARD_R   = 10.0f;   // card corner rounding — 16 read as bubbly balloons
 
 // ---- custom titlebar --------------------------------------------------------
 // The OS draws nothing — this band is part of the same glass canvas as the
@@ -83,79 +84,80 @@ constexpr float MARGIN   = 16.0f;
 constexpr float TB_H       = 40.0f;                       // draggable band height
 constexpr float TB_BTN_W   = 38.0f;                       // min / close button width
 constexpr float TB_CTRLS_W = 2.0f * TB_BTN_W;            // reserved right corner
+constexpr float CHIP_H     = 20.0f;                       // status chip height
 
 inline ImRect TBMinBtn()    { return ImRect(CLIENT_W - TB_CTRLS_W, 0.0f, CLIENT_W - TB_BTN_W, TB_H); }
 inline ImRect TBCloseBtn()  { return ImRect(CLIENT_W - TB_BTN_W, 0.0f, CLIENT_W, TB_H); }
 inline float  TBChipRight() { return CLIENT_W - TB_CTRLS_W - 10.0f; }   // chips end here
 
 inline ImVec2 Client()            { return ImVec2(CLIENT_W, CLIENT_H); }
-inline float  ContentRight()      { return CLIENT_W - MARGIN; }          // 544
-inline float  ContentW()          { return CLIENT_W - 2 * MARGIN; }      // 528
-inline float  CardGap()           { return 10.0f; }
+inline float  ContentRight()      { return CLIENT_W - MARGIN; }          // 546
+inline float  ContentW()          { return CLIENT_W - 2 * MARGIN; }      // 532
+inline float  CardGap()           { return 12.0f; }
 
 // segmented control
-inline ImRect SegRect()           { return ImRect(MARGIN, 50.0f, ContentRight(), 86.0f); }
+inline ImRect SegRect()           { return ImRect(MARGIN, 46.0f, ContentRight(), 76.0f); }
 inline ImRect SegSeg(int i)       { const float w = ContentW() / 4.0f;
-                                    return ImRect(MARGIN + i * w, 50.0f, MARGIN + (i + 1) * w, 86.0f); }
+                                    return ImRect(MARGIN + i * w, 46.0f, MARGIN + (i + 1) * w, 76.0f); }
 
 // ---- Clicker tab -----------------------------------------------------------
-inline ImRect LeftCard()          { return ImRect(MARGIN, 96.0f, MARGIN + 259.0f, 314.0f); }
-inline ImRect RightCard()         { return ImRect(285.0f, 96.0f, ContentRight(), 314.0f); }
-inline ImRect ActivationCard()    { return ImRect(MARGIN, 324.0f, ContentRight(), 450.0f); }
+inline ImRect LeftCard()          { return ImRect(MARGIN, 84.0f, MARGIN + 261.0f, 288.0f); }
+inline ImRect RightCard()         { return ImRect(285.0f, 84.0f, ContentRight(), 288.0f); }
+inline ImRect ActivationCard()    { return ImRect(MARGIN, 298.0f, ContentRight(), 446.0f); }
 
-// inside a card: content box is the card inset by 14 px (12 top)
-inline ImRect CardContent(const ImRect& c) { return ImRect(c.Min.x + 14, c.Min.y + 12, c.Max.x - 14, c.Max.y - 12); }
+// inside a card: content box is the card inset by 12 px
+inline ImRect CardContent(const ImRect& c) { return ImRect(c.Min.x + 12, c.Min.y + 12, c.Max.x - 12, c.Max.y - 12); }
 
-// side card rows (card height 218): title+switch, hotkey, then three sliders
-inline ImRect SideToggle(const ImRect& card)   { return ImRect(card.Min.x + 14, card.Min.y + 16,
-                                                               card.Max.x - 14, card.Min.y + 44); }
-inline ImRect SideBind(const ImRect& card)     { return ImRect(card.Min.x + 14, card.Min.y + 52,
-                                                               card.Max.x - 14, card.Min.y + 76); }
-inline ImRect SideSlider(const ImRect& card, int i) { return ImRect(card.Min.x + 14, card.Min.y + 86 + i * 38,
-                                                               card.Max.x - 14, card.Min.y + 86 + i * 38 + 32); }
+// side card rows (card height 204): toggle+title, hotkey, then three sliders
+inline ImRect SideToggle(const ImRect& card)   { return ImRect(card.Min.x + 12, card.Min.y + 12,
+                                                               card.Max.x - 12, card.Min.y + 38); }
+inline ImRect SideBind(const ImRect& card)     { return ImRect(card.Min.x + 12, card.Min.y + 46,
+                                                               card.Max.x - 12, card.Min.y + 68); }
+inline ImRect SideSlider(const ImRect& card, int i) { return ImRect(card.Min.x + 12, card.Min.y + 76 + i * 40,
+                                                               card.Max.x - 12, card.Min.y + 76 + i * 40 + 36); }
 
-inline ImRect ActToggle(const ImRect& card, int i) { return ImRect(card.Min.x + 14, card.Min.y + 30 + i * 30,
-                                                                   card.Max.x - 14, card.Min.y + 30 + i * 30 + 26); }
+inline ImRect ActToggle(const ImRect& card, int i) { return ImRect(card.Min.x + 12, card.Min.y + 36 + i * 34,
+                                                                   card.Max.x - 12, card.Min.y + 36 + i * 34 + 26); }
 
 // ---- Misc tab ---------------------------------------------------------------
-inline ImRect BlockCard()         { return ImRect(MARGIN, 96.0f, ContentRight(), 224.0f); }
-inline ImRect BlockToggle()       { return ImRect(MARGIN + 14, 130.0f, ContentRight() - 14, 156.0f); }
-inline ImRect BlockSlider()       { return ImRect(MARGIN + 14, 164.0f, ContentRight() - 14, 196.0f); }
-inline float  BlockNoteY()        { return 206.0f; }
-inline ImRect StatsCard()         { return ImRect(MARGIN, 234.0f, ContentRight(), 416.0f); }
-inline ImRect StatsResetBtn()     { return ImRect(ContentRight() - 14 - 150.0f, 374.0f, ContentRight() - 14.0f, 406.0f); }
+inline ImRect BlockCard()         { return ImRect(MARGIN, 84.0f, ContentRight(), 214.0f); }
+inline ImRect BlockToggle()       { return ImRect(MARGIN + 12, 114.0f, ContentRight() - 12, 140.0f); }
+inline ImRect BlockSlider()       { return ImRect(MARGIN + 12, 146.0f, ContentRight() - 12, 182.0f); }
+inline float  BlockNoteY()        { return 192.0f; }
+inline ImRect StatsCard()         { return ImRect(MARGIN, 226.0f, ContentRight(), 386.0f); }
+inline ImRect StatsResetBtn()     { return ImRect(CLIENT_W * 0.5f - 75.0f, 338.0f, CLIENT_W * 0.5f + 75.0f, 368.0f); }
 
 // ---- Configs tab ------------------------------------------------------------
-inline ImRect ConfigCard()        { return ImRect(MARGIN, 96.0f, ContentRight(), 320.0f); }
-inline float  ConfigFileY()       { return 140.0f; }
-inline ImRect ConfigBtnRow()      { return ImRect(MARGIN + 14, 170.0f, ContentRight() - 14, 204.0f); }
-inline float  ConfigStatusY()     { return 224.0f; }
+inline ImRect ConfigCard()        { return ImRect(MARGIN, 84.0f, ContentRight(), 234.0f); }
+inline float  ConfigFileY()       { return 118.0f; }
+inline ImRect ConfigBtnRow()      { return ImRect(MARGIN + 12, 146.0f, ContentRight() - 12, 176.0f); }
+inline float  ConfigStatusY()     { return 192.0f; }
 
 // ---- Settings tab -----------------------------------------------------------
 // "Theme" card: preset gradient chips on the first row, the two custom
 // pickers (Primary + Accent — Discord-style 24-bit ints) on the second.
-inline ImRect AccentCard()        { return ImRect(MARGIN, 96.0f, ContentRight(), 204.0f); }
-inline ImRect ThemePreset(const ImRect& card, int i) { return ImRect(card.Min.x + 22 + i * 40.0f, card.Min.y + 35.0f,
-                                                                     card.Min.x + 22 + i * 40.0f + 26.0f, card.Min.y + 57.0f); }
-inline ImRect ThemePrimarySw(const ImRect& card)     { return ImRect(card.Min.x + 22.0f, card.Min.y + 70.0f,
-                                                                     card.Min.x + 48.0f, card.Min.y + 94.0f); }
-inline ImRect ThemeAccentSw(const ImRect& card)      { return ImRect(card.Min.x + 150.0f, card.Min.y + 70.0f,
-                                                                     card.Min.x + 176.0f, card.Min.y + 94.0f); }
-inline ImRect PrefsCard()         { return ImRect(MARGIN, 214.0f, ContentRight(), 348.0f); }
-inline ImRect PrefsRow(const ImRect& card, int i) { return ImRect(card.Min.x + 14, card.Min.y + 30 + i * 34,
-                                                                  card.Max.x - 14, card.Min.y + 30 + i * 34 + 26); }
-inline ImRect AboutCard()         { return ImRect(MARGIN, 358.0f, ContentRight(), 442.0f); }
+inline ImRect AccentCard()        { return ImRect(MARGIN, 84.0f, ContentRight(), 204.0f); }
+inline ImRect ThemePreset(const ImRect& card, int i) { return ImRect(card.Min.x + 16 + i * 38.0f, card.Min.y + 36.0f,
+                                                                     card.Min.x + 16 + i * 38.0f + 30.0f, card.Min.y + 60.0f); }
+inline ImRect ThemePrimarySw(const ImRect& card)     { return ImRect(card.Min.x + 16.0f, card.Min.y + 76.0f,
+                                                                     card.Min.x + 42.0f, card.Min.y + 98.0f); }
+inline ImRect ThemeAccentSw(const ImRect& card)      { return ImRect(card.Min.x + 150.0f, card.Min.y + 76.0f,
+                                                                     card.Min.x + 176.0f, card.Min.y + 98.0f); }
+inline ImRect PrefsCard()         { return ImRect(MARGIN, 216.0f, ContentRight(), 346.0f); }
+inline ImRect PrefsRow(const ImRect& card, int i) { return ImRect(card.Min.x + 12, card.Min.y + 30 + i * 31,
+                                                                  card.Max.x - 12, card.Min.y + 30 + i * 31 + 26); }
+inline ImRect AboutCard()         { return ImRect(MARGIN, 358.0f, ContentRight(), 416.0f); }
 
 // ---- footer ------------------------------------------------------------------
 inline ImRect FooterRect()        { return ImRect(MARGIN, CLIENT_H - 44.0f, ContentRight(), CLIENT_H - 8.0f); }
 
-// toggle switch metrics (iOS style)
-constexpr float SW_W = 44.0f, SW_H = 26.0f;
+// toggle switch metrics (iOS style, compact)
+constexpr float SW_W = 40.0f, SW_H = 22.0f;
 inline ImRect SwitchIn(const ImRect& row) { return ImRect(row.Max.x - SW_W, (row.Min.y + row.Max.y) * 0.5f - SW_H * 0.5f,
                                                           row.Max.x, (row.Min.y + row.Max.y) * 0.5f + SW_H * 0.5f); }
 
 // bind pill metrics
-constexpr float PILL_W = 96.0f, PILL_H = 24.0f;
+constexpr float PILL_W = 92.0f, PILL_H = 22.0f;
 inline ImRect PillIn(const ImRect& row)   { return ImRect(row.Max.x - PILL_W, (row.Min.y + row.Max.y) * 0.5f - PILL_H * 0.5f,
                                                           row.Max.x, (row.Min.y + row.Max.y) * 0.5f + PILL_H * 0.5f); }
 } // namespace lay

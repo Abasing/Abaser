@@ -158,9 +158,9 @@ int main(int argc, char** argv)
     ImFontConfig fc;
     fc.FontDataOwnedByAtlas = false;
     if (abaser::decode_binary_asset(ABASER_FONT_UBUNTU, sizeof(ABASER_FONT_UBUNTU), ttf) && ttf.size() > 4) {
-        g_font_title = io.Fonts->AddFontFromMemoryTTF(ttf.data(), (int)ttf.size(), 21.0f, &fc);
-        g_font_body  = io.Fonts->AddFontFromMemoryTTF(ttf.data(), (int)ttf.size(), 18.0f, &fc);
-        g_font_small = io.Fonts->AddFontFromMemoryTTF(ttf.data(), (int)ttf.size(), 13.0f, &fc);
+        g_font_title = io.Fonts->AddFontFromMemoryTTF(ttf.data(), (int)ttf.size(), 16.0f, &fc);
+        g_font_body  = io.Fonts->AddFontFromMemoryTTF(ttf.data(), (int)ttf.size(), 14.0f, &fc);
+        g_font_small = io.Fonts->AddFontFromMemoryTTF(ttf.data(), (int)ttf.size(), 12.0f, &fc);
     } else {
         g_font_title = io.Fonts->AddFontDefault();
         g_font_body  = io.Fonts->AddFontDefault();

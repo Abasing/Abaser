@@ -758,9 +758,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     font_cfg.FontDataOwnedByAtlas = false;
     if (abaser::decode_binary_asset(ABASER_FONT_UBUNTU, sizeof(ABASER_FONT_UBUNTU), ubuntu_ttf)
         && ubuntu_ttf.size() > 4) {
-        g_fonts.title = io.Fonts->AddFontFromMemoryTTF(ubuntu_ttf.data(), (int)ubuntu_ttf.size(), 21.0f, &font_cfg);
-        g_fonts.body  = io.Fonts->AddFontFromMemoryTTF(ubuntu_ttf.data(), (int)ubuntu_ttf.size(), 18.0f, &font_cfg);
-        g_fonts.small = io.Fonts->AddFontFromMemoryTTF(ubuntu_ttf.data(), (int)ubuntu_ttf.size(), 13.0f, &font_cfg);
+        g_fonts.title = io.Fonts->AddFontFromMemoryTTF(ubuntu_ttf.data(), (int)ubuntu_ttf.size(), 16.0f, &font_cfg);
+        g_fonts.body  = io.Fonts->AddFontFromMemoryTTF(ubuntu_ttf.data(), (int)ubuntu_ttf.size(), 14.0f, &font_cfg);
+        g_fonts.small = io.Fonts->AddFontFromMemoryTTF(ubuntu_ttf.data(), (int)ubuntu_ttf.size(), 12.0f, &font_cfg);
     } else {
         g_fonts.title = io.Fonts->AddFontDefault();
         g_fonts.body  = io.Fonts->AddFontDefault();

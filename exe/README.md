@@ -60,13 +60,16 @@ shutdown/logoff the settings are still saved on the way out.
 ## The UI
 
 Apple **Liquid Glass** style: one translucent canvas under frosted glass
-cards — 1 px light borders, top specular highlights, 16 px continuous
-radii — with iOS-style controls: toggle switches, one-row sliders, a
-segmented tab control, status chips and theme swatches. Everything renders
-through `src/ui.cpp`, shared verbatim with the headless simulator (see
-`sim/README.md`). The window is frameless, so the canvas — gradient,
-glows and all — runs all the way under the top band. There is no native
-title bar.
+cards — 1 px light borders, top specular highlights, 10 px corner radii —
+with iOS-style controls: toggle switches (dark OFF trough so "off" always
+reads), one-row sliders, a segmented tab control whose active pill is the
+solid accent color, status chips and theme swatches. Cards are sized to
+their content (no hollow bottoms), every label is vertically centered in
+its row, and the type scale is 16/14/12 px so the settings actually fit.
+Everything renders through `src/ui.cpp`, shared verbatim with the headless
+simulator (see `sim/README.md`). The window is frameless, so the canvas —
+gradient, glows and all — runs all the way under the top band. There is no
+native title bar.
 
 Tabs:
 
