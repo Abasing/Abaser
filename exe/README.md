@@ -135,6 +135,32 @@ The mod never clicks. All clicks still come from this exe — its own
 engine, its own hotkeys, its own `PostMessage` targeting; the state line
 only decides *whether* the engine fires, never *how*.
 
+### Settings over the link — the in-game panel
+
+The link carries more than state. The mod can open a small **in-game
+panel** (Right Shift by default, rebindable; or `/abaser panel`) whose
+switches and sliders send one `{"config":{...}}` line per change over
+stdin, using the exact `abaser.ini` key names:
+
+- `ApplyJsonConfig` (ui_state.h) feeds each key through the same
+  `ApplyConfigKey` path the UI and the ini loader use — the panel cannot
+  set a CPS above 25 or a chance above 100, exactly like the sliders;
+- the applied settings are **saved to abaser.ini** immediately, like any
+  UI change, and survive restarts;
+- the exe answers with the canonical snapshot (`BuildConfigJson`) so the
+  panel and the exe can never disagree about what is set;
+- a 2 s **status line** (`BuildStatusJson`) streams the armed sides, the
+  live CPS and the gate state (menu open / bow drawn / game found) so the
+  panel's footer is as honest as this exe's own footer;
+- `{"get":"config"}` re-dumps on demand; the first stdin line triggers a
+  dump too, so a freshly opened panel shows real values immediately.
+
+The panel never sends a click and never tells the engine *how* or *when*
+to fire beyond the settings any user could set at the exe's own window —
+it is another pair of hands on the same knobs, while the game keeps
+running. Because the panel is itself a GUI, the mod reports `gui=true`
+while it is open and every click is held while you configure.
+
 Run standalone (no arguments, no mod) and everything behaves exactly as
 before — the gates just stay open.
 
@@ -165,7 +191,9 @@ the state actually changes.
 - **Frameless seamless window** — the glass canvas replaces the native bar.
 - **Discord-style two-int theming** with luminance-safe derived colors.
 - **Mod link** — game state (open GUIs, held bow) over stdin, click gates
-  shared with the regression-tested simulator.
+  shared with the regression-tested simulator; settings flow the other way
+  from the in-game panel over the same link (applied through the ini
+  path, echoed back, persisted).
 - No `imgui.ini` litter, no console flash, no shell-outs on exit.
 
 ## Deliberately absent

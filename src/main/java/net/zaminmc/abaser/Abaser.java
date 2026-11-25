@@ -16,8 +16,9 @@ import net.minecraftforge.fml.common.event.FMLPreInitializationEvent;
  * external clickers. This mod carries no clicking logic of its own -- it
  * starts the exe (in the system tray) when a server loads, feeds it live
  * game state over stdin (is a GUI open? is a bow held?) so the exe can hold
- * its clicks in menus and while a bow is drawn, and stops it when the game
- * closes.
+ * its clicks in menus and while a bow is drawn, gives you the in-game
+ * panel (Right Shift / /abaser panel) that edits the exe's settings
+ * through the same link, and stops it when the game closes.
  */
 @Mod(modid = Abaser.MODID, name = Abaser.NAME,
      version = Abaser.VERSION, acceptedMinecraftVersions = "[1.8.8]")

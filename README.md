@@ -21,6 +21,7 @@ no focus games, no misclicks into your browser.
 | Left toggle | **F4** | Arm/disarm the left clicker |
 | Right toggle | **F4** | Arm/disarm the right clicker (same key by default — rebind to split) |
 | Hide window | **INSERT** | Hide/show the Abaser window (clickers keep running) |
+| Open in-game panel | **Right Shift** (in the mod) | The companion mod's in-game panel — see "The mod link" |
 
 Everything is in the UI: randomized CPS min/max per side, hit chance,
 Block Hit (sword-block taps), the two-color theme, rebindable keys.
@@ -78,6 +79,32 @@ The clicks still come from the exe itself, from its own engine and its own
 hotkeys, exactly as before — the mod never generates, translates or
 forwards a single click; it only reports what it can see.
 
+### The in-game panel — configure it from inside the game
+
+The mod link carries SETTINGS as well as state. Press **Right Shift**
+(rebindable in Minecraft's Controls, `key.categories.abaser`) or run
+`/abaser panel` and the mod opens a small glass-styled panel in-game:
+
+- the **left and right cards** (arm switch, CPS max/min, chance),
+- **activation** toggles (hold-to-click, focus gate, legacy timing),
+- **block hit** with its own chance slider,
+- the six **theme preset pairs** (the same Discord-style two-int colors),
+- a footer with the **live CPS** and the pause reason ("a menu is open",
+  "bow drawn") — the same honesty the exe's own footer has.
+
+Every change leaves the mod as one `{"config":{...}}` line on the exe's
+stdin using the exact `abaser.ini` key names; the exe applies it through
+the same code path as its own sliders (same clamps), **persists it to
+abaser.ini**, and echoes the canonical snapshot back on stdout. A 2 s
+status line keeps the panel's live numbers fresh. The exe also dumps its
+current settings on the first stdin line, so a freshly opened panel shows
+what the exe is actually doing.
+
+The panel is a cockpit, not the engine. It sends numbers for the knobs the
+exe already owns — never a click. And because the panel is a GUI like any
+other, the mod reports `gui=true` while it is open, so the exe holds every
+click while you configure it.
+
 Without the mod, the exe behaves exactly as it always has (standalone,
 tray, hotkeys); without the exe, the mod just sits there — it cannot click
 anything.
@@ -89,7 +116,9 @@ See `exe/README.md` for the full details.
 The 1.8.8 Forge mod in this repository used to contain the auto-clicker.
 It doesn't anymore — the clicking lives in the exe, and the mod's whole job
 is the **mod link** above: start the exe with the server, feed it game
-state over stdin, stop it when the game closes. `/abaser` in chat explains
+state over stdin, stop it when the game closes, and give you the
+**in-game panel** (Right Shift, or `/abaser panel`) so you can manage and
+configure the clicker without leaving the game. `/abaser` in chat explains
 the wiring.
 
 ## Layout
