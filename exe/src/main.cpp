@@ -275,9 +275,30 @@ static void ClickerThread()
 //              normal; left clicks are untouched;
 //   * "exit" — the game is closing -> shut down gracefully.
 // stdin EOF (game process gone, even after a crash) is a fallback exit.
+//
+// The link also carries SETTINGS (the in-game panel): the mod may send
+//     {"config":{...abaser.ini keys...}}   — apply, persist, echo back
+//     {"get":"config"}                     — dump the current settings
+// Answers and a 2 s live-status line go out on stdout (ModOut below). The
+// mod only turns knobs; every click is still produced by this engine.
 // ---------------------------------------------------------------------------
 static std::atomic<bool> g_exit_requested{false};
 static std::atomic<bool> g_mod_linked{false};
+static std::mutex g_mod_out_mutex;
+static std::string ConfigPath();                 // defined below (abaser.ini path)
+
+// One JSON line back to whoever spawned us (the mod reads it). Standalone
+// runs have no usable stdout handle — nothing is written, nothing changes.
+static void ModOut(const std::string& s)
+{
+    HANDLE out = ::GetStdHandle(STD_OUTPUT_HANDLE);
+    if (out == nullptr || out == INVALID_HANDLE_VALUE) return;
+    const std::string line = s + "\n";
+    std::lock_guard<std::mutex> lock(g_mod_out_mutex);
+    DWORD written = 0;
+    if (::WriteFile(out, line.c_str(), (DWORD)line.size(), &written, nullptr))
+        ::FlushFileBuffers(out);
+}
 
 // Look for "key" : true|false in a JSON-ish line; -1 when absent.
 static int ModJsonFlag(const std::string& line, const char* key)
@@ -312,11 +333,26 @@ static void ModLinkThread()
             buf.erase(0, pos + 1);
             if (line.empty()) continue;
 
+            const bool first_contact = !g_mod_linked.load();
+
+            // ---- in-game panel settings (the mod turns the same knobs) ----
+            if (ApplyJsonConfig(line) > 0) {
+                SaveConfig(ConfigPath());            // persist like the UI does
+                snprintf(g_config_status, sizeof(g_config_status), "%s",
+                         VSTR("settings applied from the in-game panel"));
+                ModOut(BuildConfigJson());           // canonical echo
+            }
+            if (line.find("\"get\"") != std::string::npos)
+                ModOut(BuildConfigJson());           // panel (re)opened: dump
+
             const int gui = ModJsonFlag(line, "gui");
             const int bow = ModJsonFlag(line, "bow");
             if (gui >= 0) mod_gui_open    = gui != 0;
             if (bow >= 0) mod_holding_bow = bow != 0;
             g_mod_linked = true;
+
+            if (first_contact)
+                ModOut(BuildConfigJson());           // handshake: current settings
 
             const bool exit_cmd = (line == "exit") || (line.find("\"exit\"") != std::string::npos);
             if (exit_cmd) {
@@ -329,6 +365,17 @@ static void ModLinkThread()
     // EOF: the game closed (or crashed). Follow it down.
     g_mod_linked = false;
     g_exit_requested = true;
+}
+
+// 2 s live status for the in-game panel: armed sides, live CPS, the gates.
+static void ModStatusThread()
+{
+    for (;;) {
+        precise_sleep(2000);
+        if (!g_mod_linked.load()) continue;
+        ModOut(BuildStatusJson(FindWindowA("LWJGL", nullptr) != nullptr,
+                               LiveCps(true), LiveCps(false)));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -777,8 +824,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     clicker.detach();
 
     // --- mod link (managed mode only) ----------------------------------------
-    if (managed)
+    if (managed) {
         std::thread(ModLinkThread).detach();
+        std::thread(ModStatusThread).detach();
+    }
 
     // --- tray ---------------------------------------------------------------
     if (CreateTrayWindow(wc.hInstance))

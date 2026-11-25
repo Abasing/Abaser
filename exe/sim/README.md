@@ -26,7 +26,10 @@ and re-theme the background gradient · the full click-gate truth table
 (open GUI blocks everything, drawn bow blocks right only, no game window
 blocks everything) · the drawn minimize / close buttons fire the host
 callbacks · the Dim backdrop toggle flips · counters reset · the MC /
-no-game chip switches.
+no-game chip switches · a `{"config":{...}}` line from the in-game panel
+applies every key with the UI's clamps, arms/rebinds/themes without
+weakening the click gates, dumps round-trip losslessly, persists through
+abaser.ini, and the status line reports armed sides + live CPS.
 
 ## Run
 

@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <string>
 #include <fstream>
+#include <mutex>
 
 // ---------------------------------------------------------------------------
 // String obfuscation ("the key is in the source code")
@@ -343,6 +344,8 @@ inline void ApplyConfigKey(const std::string& key, const std::string& val)
 
 inline bool LoadConfig(const std::string& path)
 {
+    static std::mutex s_cfg_mutex;   // the mod link can apply configs off-thread
+    std::lock_guard<std::mutex> lock(s_cfg_mutex);
     std::ifstream in(path.c_str());
     if (!in) return false;
     std::string line;
@@ -359,6 +362,8 @@ inline bool LoadConfig(const std::string& path)
 
 inline bool SaveConfig(const std::string& path)
 {
+    static std::mutex s_cfg_mutex;   // same file can be saved by UI + mod link
+    std::lock_guard<std::mutex> lock(s_cfg_mutex);
     std::ofstream out(path.c_str());
     if (!out) return false;
     out << "# Abaser Clicker settings (loaded at startup, saved on exit)\n";
@@ -383,4 +388,112 @@ inline bool SaveConfig(const std::string& path)
     out << "theme_primary = "    << theme_primary    << "\n";
     out << "theme_accent = "     << theme_accent     << "\n";
     return true;
+}
+
+// --- the in-game panel (remote config over the mod link) ---------------------
+//
+// The companion mod can open a small panel in-game and edit the SAME settings
+// this exe edits. Every change arrives as one JSON line on stdin:
+//
+//     {"config":{"left_max_cps":13.5,"hit_chance":90,"theme_accent":9332727}}
+//
+// Keys use the exact abaser.ini names, so ApplyConfigKey applies them with the
+// same clamps as the on-screen sliders. The exe answers on stdout with the
+// canonical snapshot (BuildConfigJson) after every apply, and streams a
+// status line every 2 s (BuildStatusJson) so the panel can show live state.
+// The mod never sends clicks and never touches the engine — it only turns the
+// same knobs the exe's own UI turns.
+inline bool JsonExtractValue(const std::string& line, const char* key, std::string* out)
+{
+    const std::string needle = std::string("\"") + key + "\"";
+    const size_t p = line.find(needle);
+    if (p == std::string::npos) return false;
+    size_t c = line.find(':', p + needle.size());
+    if (c == std::string::npos) return false;
+    c++;
+    while (c < line.size() && (line[c] == ' ' || line[c] == '\t')) c++;
+    if (c >= line.size()) return false;
+    if (line[c] == '"') {                       // string value
+        size_t e = c + 1;
+        while (e < line.size() && line[e] != '"') e++;
+        if (e >= line.size()) return false;
+        *out = line.substr(c + 1, e - c - 1);
+        return true;
+    }
+    size_t e = c;                               // number / true / false
+    while (e < line.size() && line[e] != ',' && line[e] != '}' && line[e] != ' ' && line[e] != '\t') e++;
+    if (e == c) return false;
+    *out = line.substr(c, e - c);
+    return true;
+}
+
+// Every setting the panel may set — exactly the abaser.ini key set.
+static const char* const ABASER_CONFIG_KEYS[] = {
+    "left_bind", "right_bind", "hide_bind",
+    "left_min_cps", "left_max_cps", "right_min_cps", "right_max_cps",
+    "hit_chance", "right_chance",
+    "blockhit", "blockhit_chance",
+    "hold_mode", "require_focus", "legacy_timing", "other_background",
+    "left_enabled", "right_enabled",
+    "theme_primary", "theme_accent",
+};
+static const int ABASER_CONFIG_KEY_COUNT =
+    (int)(sizeof(ABASER_CONFIG_KEYS) / sizeof(ABASER_CONFIG_KEYS[0]));
+
+// Apply a "config" JSON line. Returns how many keys it carried.
+inline int ApplyJsonConfig(const std::string& line)
+{
+    int applied = 0;
+    std::string val;
+    for (const char* k : ABASER_CONFIG_KEYS)
+        if (JsonExtractValue(line, k, &val)) { ApplyConfigKey(k, val); applied++; }
+    return applied;
+}
+
+// The canonical settings snapshot the exe sends back after every apply.
+inline std::string BuildConfigJson()
+{
+    char num[64];
+    std::string o = "{\"config\":{";
+    for (int i = 0; i < ABASER_CONFIG_KEY_COUNT; i++) {
+        const char* k = ABASER_CONFIG_KEYS[i];
+        if      (!strcmp(k, "left_bind"))       snprintf(num, sizeof(num), "%d", left_bind);
+        else if (!strcmp(k, "right_bind"))      snprintf(num, sizeof(num), "%d", right_bind);
+        else if (!strcmp(k, "hide_bind"))       snprintf(num, sizeof(num), "%d", hide_bind);
+        else if (!strcmp(k, "left_min_cps"))    snprintf(num, sizeof(num), "%g", (double)left_min_cps);
+        else if (!strcmp(k, "left_max_cps"))    snprintf(num, sizeof(num), "%g", (double)left_max_cps);
+        else if (!strcmp(k, "right_min_cps"))   snprintf(num, sizeof(num), "%g", (double)right_min_cps);
+        else if (!strcmp(k, "right_max_cps"))   snprintf(num, sizeof(num), "%g", (double)right_max_cps);
+        else if (!strcmp(k, "hit_chance"))      snprintf(num, sizeof(num), "%d", hit_chance);
+        else if (!strcmp(k, "right_chance"))    snprintf(num, sizeof(num), "%d", right_chance);
+        else if (!strcmp(k, "blockhit"))        snprintf(num, sizeof(num), "%s", blockhit ? "true" : "false");
+        else if (!strcmp(k, "blockhit_chance")) snprintf(num, sizeof(num), "%d", blockhit_chance);
+        else if (!strcmp(k, "hold_mode"))       snprintf(num, sizeof(num), "%s", hold_mode ? "true" : "false");
+        else if (!strcmp(k, "require_focus"))   snprintf(num, sizeof(num), "%s", require_focus ? "true" : "false");
+        else if (!strcmp(k, "legacy_timing"))   snprintf(num, sizeof(num), "%s", legacy_timing ? "true" : "false");
+        else if (!strcmp(k, "other_background")) snprintf(num, sizeof(num), "%s", other_background ? "true" : "false");
+        else if (!strcmp(k, "left_enabled"))    snprintf(num, sizeof(num), "%s", left_enabled ? "true" : "false");
+        else if (!strcmp(k, "right_enabled"))   snprintf(num, sizeof(num), "%s", right_enabled ? "true" : "false");
+        else if (!strcmp(k, "theme_primary"))   snprintf(num, sizeof(num), "%u", theme_primary);
+        else if (!strcmp(k, "theme_accent"))    snprintf(num, sizeof(num), "%u", theme_accent);
+        else continue;
+        o += std::string("\"") + k + "\":" + num;
+        if (i + 1 < ABASER_CONFIG_KEY_COUNT) o += ',';
+    }
+    o += "}}";
+    return o;
+}
+
+// Live-state line, streamed every 2 s while the link is up.
+inline std::string BuildStatusJson(bool mc_found, float cps_l, float cps_r)
+{
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+        "{\"status\":{\"left_on\":%s,\"right_on\":%s,\"cps_l\":%.1f,\"cps_r\":%.1f,"
+        "\"gui\":%s,\"bow\":%s,\"mc\":%s}}",
+        left_enabled ? "true" : "false", right_enabled ? "true" : "false",
+        (double)cps_l, (double)cps_r,
+        mod_gui_open ? "true" : "false", mod_holding_bow ? "true" : "false",
+        mc_found ? "true" : "false");
+    return buf;
 }

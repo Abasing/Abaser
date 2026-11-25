@@ -395,6 +395,73 @@ int main(int argc, char** argv)
     g_host.mod_holding_bow = false;
 
     // ------------------------------------------------------------------
+    // REMOTE CONFIG (the in-game panel protocol): the mod sends one JSON
+    // line, the exe applies it with the same clamps as the UI sliders,
+    // persists it and echoes the canonical snapshot back.
+    // ------------------------------------------------------------------
+    {
+        ResetDefaults();
+        mod_gui_open = false; mod_holding_bow = false;
+
+        const std::string panel_line =
+            "{\"gui\":false,\"bow\":false,\"held\":\"item.bow\","
+            "\"config\":{\"left_max_cps\":18.5,\"left_min_cps\":2.0,"
+            "\"hit_chance\":55,\"blockhit\":true,\"blockhit_chance\":9,"
+            "\"theme_primary\":5793266,\"theme_accent\":9347583,"
+            "\"right_enabled\":true,\"left_bind\":116,"
+            "\"hold_mode\":false,\"legacy_timing\":true}}";
+        Check(ApplyJsonConfig(panel_line) == 11, "config line applies every key it carries");
+        Check(left_max_cps == 18.5f && left_min_cps == 2.0f, "config line sets the CPS pair");
+        Check(hit_chance == 55 && blockhit && blockhit_chance == 9, "config line sets chance + block hit");
+        Check(right_enabled && left_bind == 116, "config line arms + rebinds");
+        Check(!hold_mode && legacy_timing, "config line flips activation toggles");
+        Check(theme_primary == 0x5865F2u && theme_accent == 0x8EA1FFu, "config line themes (Discord ints)");
+        Check(mod_gui_open == false, "state flags on a config line are NOT eaten");
+
+        // the config never fights the click gates: armed side, open GUI
+        mod_gui_open = true;
+        Check(GateRight(true, true) == false, "panel-armed right clicker still gated by an open GUI");
+        mod_gui_open = false;
+        Check(GateRight(true, true) == true,  "panel-armed right clicker fires in-game");
+
+        // clamping — the panel cannot set what the sliders cannot
+        ApplyJsonConfig("{\"config\":{\"left_max_cps\":99,\"hit_chance\":500,\"left_min_cps\":-3}}");
+        Check(left_max_cps == CPS_HI && hit_chance == CHANCE_HI && left_min_cps == CPS_LO,
+              "config values clamp exactly like the UI sliders");
+
+        // round-trip: dump -> apply onto defaults restores every value
+        left_min_cps = 9.5f;                    // 9.5 is exact in binary
+        const std::string dump = BuildConfigJson();
+        const float  d_max = left_max_cps, d_min = left_min_cps;
+        const int    d_ch  = hit_chance,  d_bnd = left_bind;
+        const bool   d_bh  = blockhit,    d_hm  = hold_mode;
+        const unsigned int d_tp = theme_primary, d_ta = theme_accent;
+        ResetDefaults();
+        Check(ApplyJsonConfig(dump) == ABASER_CONFIG_KEY_COUNT, "config dump re-applies every key");
+        Check(left_max_cps == d_max && left_min_cps == d_min && hit_chance == d_ch && left_bind == d_bnd &&
+              blockhit == d_bh && hold_mode == d_hm && theme_primary == d_tp && theme_accent == d_ta,
+              "config dump round-trips losslessly");
+        Check(dump.find("\"config\":{") == 1, "dump is a config object");
+
+        // status line shape
+        left_enabled = true;
+        right_enabled = false;
+        const std::string st = BuildStatusJson(true, 11.5f, 0.0f);
+        Check(st.find("\"status\":{") == 1 && st.find("\"left_on\":true") != std::string::npos &&
+              st.find("\"right_on\":false") != std::string::npos && st.find("\"cps_l\":11.5") != std::string::npos &&
+              st.find("\"mc\":true") != std::string::npos,
+              "status line reports armed side, live CPS and the game window");
+
+        // ini round-trip survives a remote apply
+        SaveConfig(SimConfigPath(nullptr));
+        ResetDefaults();
+        Check(LoadConfig(SimConfigPath(nullptr)) && left_min_cps == d_min && hit_chance == d_ch,
+              "remote-applied settings persist through abaser.ini");
+        ResetDefaults();
+        left_enabled = false;
+    }
+
+    // ------------------------------------------------------------------
     printf("\n%d failure(s)\n", g_failures);
     return g_failures == 0 ? 0 : 1;
 }
