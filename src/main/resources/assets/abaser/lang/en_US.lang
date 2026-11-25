@@ -1,1 +1,3 @@
-# Abaser -- no keybinds anymore: the clicker is the standalone Abaser Clicker exe.
+# Abaser -- the in-game panel keybind (the clicking lives in the standalone exe)
+key.categories.abaser=Abaser
+key.abaser.panel=Open the Abaser panel

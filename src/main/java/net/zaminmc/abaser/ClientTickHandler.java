@@ -1,10 +1,18 @@
 package net.zaminmc.abaser;
 
+import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
+
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.init.Items;
@@ -21,7 +29,7 @@ import net.minecraftforge.fml.common.gameevent.TickEvent;
  * This class NEVER clicks anything and NEVER touches the mouse. Clicks come
  * from the exe itself, exactly as they always have (PostMessage against the
  * LWJGL window, driven by the exe's own hotkeys and CPS engine). The mod's
- * whole job is three small things:
+ * whole job is five small things:
  *
  *   1. start the exe (hidden in the system tray) when a server/world loads,
  *   2. feed it live game state over stdin, one JSON line per change:
@@ -32,7 +40,13 @@ import net.minecraftforge.fml.common.gameevent.TickEvent;
  *      "bow" — the player is holding a bow -> the exe holds its right-click
  *              output (right autoclicker and Block Hit taps) so charging the
  *              bow behaves normally; left clicks are untouched;
- *   3. stop the exe when the game closes.
+ *   3. read what the exe answers on stdout (its settings snapshot and a 2 s
+ *      live status) so the in-game panel can show and edit the SAME
+ *      settings the exe edits — see AbaserConfigGui;
+ *   4. forward the panel's {"config":{...}} lines to the exe. The panel is
+ *      a cockpit, not the engine: it only turns the same knobs the exe's
+ *      own UI turns, and the exe still produces every click itself;
+ *   5. stop the exe when the game closes.
  *
  * The exe also exits on its own when stdin hits EOF, so even a hard game
  * crash cannot orphan it.
@@ -55,6 +69,13 @@ public class ClientTickHandler {
         if (event.phase != TickEvent.Phase.END) return;
         final Minecraft mc = Minecraft.getMinecraft();
         final boolean inWorld = mc.theWorld != null && mc.thePlayer != null;
+
+        // ---- 0. the panel keybind (Right Shift by default) --------------------
+        if (inWorld && ClientProxy.panelKey != null && ClientProxy.panelKey.isPressed()
+                && mc.currentScreen == null) {
+            mc.displayGuiScreen(new AbaserConfigGui());
+            return;
+        }
 
         // ---- 1. the server just loaded: bring the clicker up in the tray ----
         if (inWorld && !worldJoined) {
@@ -108,17 +129,110 @@ public class ClientTickHandler {
         new Thread(new Runnable() {
             public void run() {
                 try {
-                    Process p = new ProcessBuilder(exe.getAbsolutePath(), "--managed", "/tray").start();
+                    Process p = new ProcessBuilder(exe.getAbsolutePath(), "--managed", "/tray")
+                            .start();
                     clicker = p;
                     toClicker = new BufferedWriter(new OutputStreamWriter(p.getOutputStream(), StandardCharsets.US_ASCII));
                     haveLast = false;
+                    LinkState.reset();
+                    startStdoutReader(p);
                     chat("Abaser Clicker is running in your system tray - it clicks only inside Minecraft.");
+                    // the exe dumps its current settings on the first line it
+                    // sees; asking explicitly too keeps the panel in sync even
+                    // if a heartbeat raced the handshake
+                    sendConfigLine("{\"get\":\"config\"}");
                 } catch (IOException e) {
                     Abaser.logger.warn("Abaser: could not start AbaserClicker.exe", e);
                     chat("Found AbaserClicker.exe but could not start it (see log).");
                 }
             }
         }, "Abaser-Launch").start();
+    }
+
+    /**
+     * The exe answers on stdout: {"config":{...}} snapshots and 2 s status
+     * lines. This thread mirrors them into LinkState for the in-game panel.
+     * Without it the pipe would fill and block the exe, so it always runs.
+     */
+    private static void startStdoutReader(final Process p) {
+        final Thread reader = new Thread(new Runnable() {
+            public void run() {
+                try {
+                    final BufferedReader r = new BufferedReader(
+                            new InputStreamReader(p.getInputStream(), StandardCharsets.US_ASCII));
+                    String line;
+                    while ((line = r.readLine()) != null)
+                        handleExeLine(line);
+                } catch (IOException ignored) {
+                    // the exe died — the tick handler notices via the writer
+                } finally {
+                    LinkState.linkUp = false;
+                }
+            }
+        }, "Abaser-LinkRead");
+        reader.setDaemon(true);
+        reader.start();
+    }
+
+    private static void handleExeLine(String line) {
+        LinkState.linkUp = true;
+        try {
+            final JsonObject o = new JsonParser().parse(line).getAsJsonObject();
+            if (o.has("config") && o.get("config").isJsonObject()) {
+                final JsonObject cfg = o.getAsJsonObject("config");
+                final Map<String, String> m = new HashMap<String, String>();
+                for (Map.Entry<String, JsonElement> e : cfg.entrySet())
+                    if (e.getValue().isJsonPrimitive())
+                        m.put(e.getKey(), e.getValue().getAsString());
+                LinkState.applyConfigLine(m);
+            }
+            if (o.has("status") && o.get("status").isJsonObject()) {
+                final JsonObject s = o.getAsJsonObject("status");
+                LinkState.leftOn     = flag(s, "left_on");
+                LinkState.rightOn    = flag(s, "right_on");
+                LinkState.mcFound    = flag(s, "mc");
+                LinkState.guiOpen    = flag(s, "gui");
+                LinkState.holdingBow = flag(s, "bow");
+                LinkState.cpsLeft    = num(s, "cps_l");
+                LinkState.cpsRight   = num(s, "cps_r");
+            }
+        } catch (Exception ignored) {
+            // tolerate partial/garbage lines — never kill the reader
+        }
+    }
+
+    private static boolean flag(JsonObject o, String k) {
+        return o.has(k) && o.get(k).isJsonPrimitive() && o.get(k).getAsBoolean();
+    }
+
+    private static float num(JsonObject o, String k) {
+        try { return o.has(k) && o.get(k).isJsonPrimitive() ? o.get(k).getAsFloat() : 0.0f; }
+        catch (Exception e) { return 0.0f; }
+    }
+
+    /** Is the panel allowed to edit settings right now? */
+    public static boolean isLinkUp() {
+        return clicker != null && LinkState.linkUp;
+    }
+
+    /**
+     * One settings line from the in-game panel to the exe. THIS IS NOT A
+     * CLICK and never becomes one — it is numbers for the exe's own knobs;
+     * the exe applies, clamps and persists them exactly like its own UI.
+     */
+    public static void sendConfigLine(String json) {
+        try {
+            synchronized (ClientTickHandler.class) {
+                if (toClicker == null) return;
+                toClicker.write(json);
+                toClicker.write("\n");
+                toClicker.flush();
+            }
+            LinkState.linkUp = true;
+        } catch (IOException e) {
+            Abaser.logger.info("Abaser: the clicker exe is gone (config send failed)");
+            stopClicker();
+        }
     }
 
     /**
@@ -202,6 +316,7 @@ public class ClientTickHandler {
             }
         }
         haveLast = false;
+        LinkState.reset();
     }
 
     private static void chat(String msg) {

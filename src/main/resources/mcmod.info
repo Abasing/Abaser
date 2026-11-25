@@ -2,7 +2,7 @@
 {
   "modid": "abaser",
   "name": "Abaser",
-  "description": "Companion mod for the standalone Abaser Clicker executable. The mod starts the exe in your system tray when a world loads, feeds it live game state (open GUIs, held item) so it holds its clicks in menus and while a bow is drawn, and stops it when the game closes. The mod itself never clicks.",
+  "description": "Companion mod for the standalone Abaser Clicker executable. The mod starts the exe in your system tray when a world loads, feeds it live game state (open GUIs, held item) so it holds its clicks in menus and while a bow is drawn, opens a small in-game panel (Right Shift) that edits the exe's settings through the link, and stops it when the game closes. The mod itself never clicks.",
   "version": "${version}",
   "mcversion": "${mcversion}",
   "authorList": ["Abasing"],
