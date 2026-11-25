@@ -1,9 +1,10 @@
 package net.zaminmc.abaser;
 
+import org.apache.commons.lang3.ArrayUtils;
 import org.lwjgl.input.Keyboard;
 
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.settings.KeyBinding;
-import net.minecraftforge.client.ClientRegistry;
 import net.minecraftforge.client.ClientCommandHandler;
 import net.minecraftforge.fml.common.FMLCommonHandler;
 import net.minecraftforge.fml.common.event.FMLInitializationEvent;
@@ -25,8 +26,15 @@ public class ClientProxy extends CommonProxy {
     @Override
     public void init(FMLInitializationEvent event) {
         ClientCommandHandler.instance.registerCommand(new CommandAbaser());
+        // Forge 1.8.8's ClientRegistry.registerKeyBinding does not exist yet
+        // in the 11.15.0.1655 line, so register the vanilla way: append to
+        // gameSettings.keyBindings. The controls screen then lists it, can
+        // rebind it and persists it, and KeyBinding.isPressed() ticks in the
+        // vanilla input loop (only while no screen is open — exactly what
+        // the panel wants).
         panelKey = new KeyBinding("key.abaser.panel", Keyboard.KEY_RSHIFT, "key.categories.abaser");
-        ClientRegistry.registerKeyBinding(panelKey);
+        Minecraft.getMinecraft().gameSettings.keyBindings =
+                ArrayUtils.add(Minecraft.getMinecraft().gameSettings.keyBindings, panelKey);
         // TickEvents ride the FML bus in 1.8.8, not the forge bus
         FMLCommonHandler.instance().bus().register(new ClientTickHandler());
         // game closing -> clicker closes with it (the exe also exits on stdin

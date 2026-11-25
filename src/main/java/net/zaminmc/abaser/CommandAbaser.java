@@ -27,11 +27,6 @@ public class CommandAbaser extends CommandBase {
     }
 
     @Override
-    public String[] getCommandAliases() {
-        return new String[] { "ab" };
-    }
-
-    @Override
     public int getRequiredPermissionLevel() {
         return 0;
     }

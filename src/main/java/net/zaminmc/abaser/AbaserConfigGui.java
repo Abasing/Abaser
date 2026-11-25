@@ -398,7 +398,8 @@ public class AbaserConfigGui extends GuiScreen {
             final boolean hov = inRect(mx, my, x, y, sw, sh);
             // mini profile-banner: vertical gradient of the pair (Discord style)
             drawRect(x, y, x + sw, y + sh, 0x40FFFFFF);
-            this.drawGradientRect(0, x + 1, y + 1, x + sw - 1, y + sh - 1,
+            // 1.8.8's drawGradientRect has no zLevel parameter
+            this.drawGradientRect(x + 1, y + 1, x + sw - 1, y + sh - 1,
                                   (pr & 0xFFFFFF) | 0xFF000000, shade(pr, 0.42f));
             if (sel) {
                 drawRect(x - 1, y - 1, x + sw + 1, y, 0xFFFFFFFF);
