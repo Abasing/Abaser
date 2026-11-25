@@ -77,6 +77,15 @@ public class ClientTickHandler {
             return;
         }
 
+        // ---- 0b. the aim assist toggle (G by default, rebindable) -------------
+        // G flips the mod's own camera-assist engine; like everything else in
+        // this class it never presses a button — it only flips a boolean that
+        // AimAssist's tick reads.
+        if (inWorld && ClientProxy.aimKey != null && ClientProxy.aimKey.isPressed()
+                && mc.currentScreen == null) {
+            AimAssist.toggle();
+        }
+
         // ---- 1. the server just loaded: bring the clicker up in the tray ----
         if (inWorld && !worldJoined) {
             worldJoined = true;

@@ -23,7 +23,7 @@ public class CommandAbaser extends CommandBase {
 
     @Override
     public String getCommandUsage(ICommandSender sender) {
-        return "/abaser [panel]";
+        return "/abaser [panel|aim]";
     }
 
     @Override
@@ -45,6 +45,21 @@ public class CommandAbaser extends CommandBase {
                 Minecraft.getMinecraft().displayGuiScreen(new AbaserConfigGui());
                 return;
             }
+            if (a.equals("aim") || a.equals("aimassist")) {
+                // /abaser aim [on|off] — flips the mod's own camera assist
+                if (args.length > 1) {
+                    final String s = args[1].toLowerCase();
+                    if (s.equals("on") || s.equals("true") || s.equals("1"))
+                        AimAssist.setEnabled(true, true);
+                    else if (s.equals("off") || s.equals("false") || s.equals("0"))
+                        AimAssist.setEnabled(false, true);
+                    else
+                        AimAssist.toggle();
+                } else {
+                    AimAssist.toggle();
+                }
+                return;
+            }
         }
         send(sender, EnumChatFormatting.LIGHT_PURPLE + "Abaser "
                 + EnumChatFormatting.GRAY + Abaser.VERSION);
@@ -59,6 +74,10 @@ public class CommandAbaser extends CommandBase {
                 + EnumChatFormatting.WHITE + "Right Shift"
                 + EnumChatFormatting.GRAY + " (or run " + EnumChatFormatting.WHITE + "/abaser panel"
                 + EnumChatFormatting.GRAY + ") for the in-game panel.");
+        send(sender, EnumChatFormatting.GRAY + "The aim assist is built into this mod (client-side):"
+                + " press " + EnumChatFormatting.WHITE + "G" + EnumChatFormatting.GRAY
+                + " or run " + EnumChatFormatting.WHITE + "/abaser aim"
+                + EnumChatFormatting.GRAY + "; tune it in the panel's Aim Assist tab.");
         send(sender, EnumChatFormatting.GRAY + "The exe clicks only inside Minecraft:"
                 + " nothing is clicked while any menu is open or while you hold a bow.");
     }

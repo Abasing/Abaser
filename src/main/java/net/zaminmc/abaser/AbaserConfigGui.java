@@ -11,18 +11,25 @@ import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.client.renderer.GlStateManager;
 
 /**
- * The in-game Abaser panel — a small glass-styled settings screen that talks
- * to the standalone Abaser Clicker exe over the mod link.
+ * The in-game Abaser panel — a small glass-styled settings screen with two
+ * tabs, reached with Right Shift (or /abaser panel).
  *
- * This screen is a COCKPIT, not the engine: every switch and slider here
- * becomes one {"config":{...}} line on the exe's stdin, the exe applies it
- * with the same clamps as its own UI, persists it to abaser.ini and echoes
- * the canonical snapshot back. Nothing here ever generates a click — the
- * exe keeps doing all of the clicking with its own engine, its own hotkeys
- * and its own PostMessage targeting.
+ * TAB 1 — CLICKER: talks to the standalone Abaser Clicker exe over the mod
+ * link. This screen is a COCKPIT, not the engine: every switch and slider
+ * here becomes one {"config":{...}} line on the exe's stdin, the exe applies
+ * it with the same clamps as its own UI, persists it to abaser.ini and
+ * echoes the canonical snapshot back. Nothing here ever generates a click —
+ * the exe keeps doing all of the clicking with its own engine, its own
+ * hotkeys and its own PostMessage targeting.
+ *
+ * TAB 2 — AIM ASSIST: the one engine that lives inside the mod (a
+ * client-side camera nudge — see AimAssist). These knobs edit the mod's own
+ * config (config/abaser_aim.json) directly; they never travel the link
+ * because the exe has nothing to do with them.
  *
  * While this screen is open the mod reports gui=true (it is a GUI like any
- * other), so the exe holds every click while you configure it.
+ * other), so the exe holds every click while you configure it — and the aim
+ * assist freezes too, because no camera turns behind an open screen.
  *
  * Layout is hand-drawn (no vanilla Button widgets) to match the exe's
  * Liquid-Glass look: translucent cards, 1 px light borders, iOS toggles,
@@ -31,7 +38,7 @@ import net.minecraft.client.renderer.GlStateManager;
 public class AbaserConfigGui extends GuiScreen {
 
     // ---- panel geometry (scaled px) ---------------------------------------
-    private static final int PW = 244, PH = 236;
+    private static final int PW = 244, PH = 252;
 
     // ---- palette (matches the exe's glass) ---------------------------------
     private static final int C_BACKDROP   = 0x78000000;
@@ -58,6 +65,10 @@ public class AbaserConfigGui extends GuiScreen {
         { 0x22C55E, 0x86EFAC },   // green
     };
 
+    // ---- tabs ----------------------------------------------------------------
+    private static final String[] TABS = { "Clicker", "Aim Assist" };
+    private int tab = 0;                    // 0 = clicker (exe link), 1 = aim assist (mod)
+
     // ---- slider specs -------------------------------------------------------
     private static class Slider {
         final String key, label;
@@ -79,9 +90,30 @@ public class AbaserConfigGui extends GuiScreen {
     };
     private static final Slider BLOCK_CHANCE = new Slider("blockhit_chance", "Block hit chance", 1, 25, true);
 
+    // aim-assist sliders — read/write AimAssist.cfg, never the exe link
+    private static class AimSlider {
+        final String key, label;
+        final float lo, hi;
+        final boolean isInt;
+        AimSlider(String key, String label, float lo, float hi, boolean isInt) {
+            this.key = key; this.label = label; this.lo = lo; this.hi = hi; this.isInt = isInt;
+        }
+    }
+    private static final AimSlider[] AIM_LEFT = {
+        new AimSlider("aim_distance", "Distance", 1, 10, false),
+        new AimSlider("aim_fov",      "FOV",     30, 180, true),
+        new AimSlider("aim_strength", "Strength", 0, 1, false),
+    };
+    private static final AimSlider[] AIM_RIGHT = {
+        new AimSlider("aim_smooth", "Smooth",  0.05F, 1, false),
+        new AimSlider("aim_v",      "Vertical", 0, 2, false),
+        new AimSlider("aim_h",      "Horizontal", 0, 2, false),
+    };
+
     // ---- state --------------------------------------------------------------
     private final Map<String, String> work = new HashMap<String, String>();
-    private String dragKey = null;          // slider currently being dragged
+    private String dragKey = null;          // slider currently being dragged (exe tab)
+    private String aimDrag = null;          // slider currently being dragged (aim tab)
     private long   lastEditMs = 0L;         // guard against echo clobbering
 
     private int px, py;                     // panel origin
@@ -257,17 +289,23 @@ public class AbaserConfigGui extends GuiScreen {
 
         glassRect(px, py, PW, PH, C_PANEL, C_CARD_EDGE);
 
+        drawHeader();
+        drawTabs(mouseX, mouseY);
+
+        if (tab == 1) {                       // the aim tab works with or without the exe
+            drawAimTab(mouseX, mouseY);
+            return;
+        }
         if (!linked) {
             drawNotRunning(mouseX, mouseY);
             return;
         }
         if (!haveCfg) {
-            drawCentered("Syncing settings from the clicker...", py + 100, C_MUT);
+            drawCentered("Syncing settings from the clicker...", py + 110, C_MUT);
             doneButton(mouseX, mouseY);
             return;
         }
 
-        drawHeader();
         drawSideCard(px + 8,  "LEFT CLICKER",  getB("left_enabled", false), "left_enabled", SIDE_SLIDERS, mouseX, mouseY);
         drawSideCard(px + 125, "RIGHT CLICKER", getB("right_enabled", false), "right_enabled", RIGHT_SLIDERS, mouseX, mouseY);
         drawActivationCard(mouseX, mouseY);
@@ -280,8 +318,9 @@ public class AbaserConfigGui extends GuiScreen {
     }
 
     private void drawNotRunning(int mouseX, int mouseY) {
-        drawCentered("Abaser Clicker is not running", py + 92, C_TEXT);
-        drawCentered("Join a world - the mod starts it in your tray.", py + 106, C_MUT);
+        drawCentered("Abaser Clicker is not running", py + 102, C_TEXT);
+        drawCentered("Join a world - the mod starts it in your tray.", py + 116, C_MUT);
+        drawCentered("The Aim Assist tab works without it.", py + 130, C_DIM);
         doneButton(mouseX, mouseY);
     }
 
@@ -289,16 +328,41 @@ public class AbaserConfigGui extends GuiScreen {
         this.fontRendererObj.drawStringWithShadow("Abaser Clicker", px + 10, py + 7, C_TEXT);
         // live status dot + word, right-aligned
         String st; int dot;
-        if (LinkState.guiOpen)       { st = "menu open"; dot = C_WARN; }
-        else if (!LinkState.mcFound) { st = "no game";   dot = C_BAD; }
-        else                         { st = "in-game";   dot = C_OK; }
+        if (tab == 1) {
+            st  = AimAssist.cfg.enabled ? "assist on" : "assist off";
+            dot = AimAssist.cfg.enabled ? C_OK : 0x50FFFFFF;
+        } else if (LinkState.guiOpen)       { st = "menu open"; dot = C_WARN; }
+        else if (!LinkState.mcFound)        { st = "no game";   dot = C_BAD; }
+        else                                { st = "in-game";   dot = C_OK; }
         final int tw = this.fontRendererObj.getStringWidth(st);
         this.fontRendererObj.drawStringWithShadow(st, px + PW - 10 - tw - 8, py + 7, C_MUT);
         circle(px + PW - 10 - 3, py + 11.5f, 2.5f, dot);
     }
 
+    // ---- tab bar --------------------------------------------------------------
+    private final Map<Integer, int[]> tabHit = new HashMap<Integer, int[]>();
+
+    private void drawTabs(int mx, int my) {
+        tabHit.clear();
+        int x = px + 8;
+        final int y = py + 20, h = 13;
+        for (int i = 0; i < TABS.length; i++) {
+            final int w = this.fontRendererObj.getStringWidth(TABS[i]) + 12;
+            final boolean sel = tab == i;
+            final boolean hov = inRect(mx, my, x, y, w, h);
+            glassRect(x, y, w, h,
+                      sel ? accentFix(accent) : (hov ? 0x24FFFFFF : C_TRACK),
+                      sel ? lighten(accent, 0.45f) : 0x28FFFFFF);
+            this.fontRendererObj.drawStringWithShadow(TABS[i], x + 6, y + 3,
+                    sel ? 0xFFFFFFFF : (hov ? C_TEXT : C_MUT));
+            tabHit.put(i, new int[] { x, y, w });
+            x += w + 4;
+        }
+    }
+
+    // ---- CLICKER tab (the exe link) ------------------------------------------
     private void drawSideCard(int x, String title, boolean on, String toggleKey, Slider[] sliders, int mx, int my) {
-        final int y = py + 22, w = 111, h = 98;
+        final int y = py + 38, w = 111, h = 98;
         glassRect(x, y, w, h, C_CARD, C_CARD_EDGE);
         this.fontRendererObj.drawStringWithShadow(title, x + 6, y + 5, C_DIM);
 
@@ -353,21 +417,21 @@ public class AbaserConfigGui extends GuiScreen {
     }
 
     private void drawActivationCard(int mx, int my) {
-        final int x = px + 8, y = py + 128, w = 228, h = 52;
+        final int x = px + 8, y = py + 140, w = 228, h = 50;
         glassRect(x, y, w, h, C_CARD, C_CARD_EDGE);
         final int ax0 = x + 6, ax1 = x + w - 6;
         final int col2 = ax0 + 110;
 
         // row 1
-        toggleRow("Hold to click", "hold_mode", true, ax0, y + 6, ax0 + 104, mx, my);
-        toggleRow("Focus gate", "require_focus", true, col2, y + 6, ax1, mx, my);
+        toggleRow("Hold to click", "hold_mode", true, ax0, y + 5, ax0 + 104, mx, my);
+        toggleRow("Focus gate", "require_focus", true, col2, y + 5, ax1, mx, my);
         // row 2
-        toggleRow("Legacy timing", "legacy_timing", false, ax0, y + 24, ax0 + 104, mx, my);
-        toggleRow("Block hit", "blockhit", false, col2, y + 24, ax1, mx, my);
+        toggleRow("Legacy timing", "legacy_timing", false, ax0, y + 20, ax0 + 104, mx, my);
+        toggleRow("Block hit", "blockhit", false, col2, y + 20, ax1, mx, my);
         // row 3 — block-hit chance, only meaningful while block hit is on
-        final int ry = y + 40;
+        final int ry = y + 34;
         if (getB("blockhit", false)) {
-            drawSliderRow(BLOCK_CHANCE, bhX(), ry, bhW(), mx, my);
+            drawSliderRow(BLOCK_CHANCE, bhX(), bhY(), bhW(), mx, my);
         } else {
             this.fontRendererObj.drawStringWithShadow("Sword-block taps ride along with left clicks.", ax0 + 6, ry, C_DIM);
         }
@@ -375,7 +439,7 @@ public class AbaserConfigGui extends GuiScreen {
 
     // block-hit chance slider geometry — shared by draw / click / drag
     private int bhX() { return px + 20; }
-    private int bhY() { return py + 168; }
+    private int bhY() { return py + 174; }
     private int bhW() { return 210; }
 
     private void toggleRow(String label, String key, boolean def, int x, int y, int rowRight, int mx, int my) {
@@ -388,7 +452,7 @@ public class AbaserConfigGui extends GuiScreen {
     private final Map<String, int[]> rowHit = new HashMap<String, int[]>();
 
     private void drawThemeRow(int mx, int my) {
-        final int y = py + 186;
+        final int y = py + 196;
         this.fontRendererObj.drawStringWithShadow("Theme", px + 14, y + 2, C_MUT);
         final int sw = 14, sh = 12, gap = 3;
         int x = px + PW - 10 - (PRESETS.length * sw + (PRESETS.length - 1) * gap);
@@ -427,7 +491,7 @@ public class AbaserConfigGui extends GuiScreen {
     }
 
     private void drawFooter(int mx, int my) {
-        final int y = py + 204;
+        final int y = py + 212;
         // live line, dot + "x.x L / y.y R cps"
         final boolean armed = getB("left_enabled", false) || getB("right_enabled", false);
         final String live = String.format(Locale.ROOT, "%.1f L / %.1f R cps live",
@@ -457,16 +521,197 @@ public class AbaserConfigGui extends GuiScreen {
         this.fontRendererObj.drawStringWithShadow("Done", x + w / 2 - this.fontRendererObj.getStringWidth("Done") / 2, y + 3, C_TEXT);
     }
 
+    // ---- AIM ASSIST tab (the mod's own engine) --------------------------------
+
+    private float aimGet(String key) {
+        final AimAssistConfig c = AimAssist.cfg;
+        if (key.equals("aim_distance")) return c.maxDistance;
+        if (key.equals("aim_fov"))      return c.fov;
+        if (key.equals("aim_strength")) return c.strength;
+        if (key.equals("aim_smooth"))   return c.smoothFactor;
+        if (key.equals("aim_v"))        return c.verticalStrength;
+        if (key.equals("aim_h"))        return c.horizontalStrength;
+        return 0.0f;
+    }
+
+    private void aimSet(String key, float v) {
+        final AimAssistConfig c = AimAssist.cfg;
+        if      (key.equals("aim_distance")) c.maxDistance = v;
+        else if (key.equals("aim_fov"))      c.fov = v;
+        else if (key.equals("aim_strength")) c.strength = v;
+        else if (key.equals("aim_smooth"))   c.smoothFactor = v;
+        else if (key.equals("aim_v"))        c.verticalStrength = v;
+        else if (key.equals("aim_h"))        c.horizontalStrength = v;
+        c.clamp();
+    }
+
+    private boolean aimToggleState(String key) {
+        final AimAssistConfig c = AimAssist.cfg;
+        if      (key.equals("aim_smooth_on")) return c.smoothAim;
+        else if (key.equals("aim_silent"))    return c.silent;
+        else if (key.equals("aim_require"))   return c.requireClick;
+        else if (key.equals("aim_mobs"))      return c.onlyMobs;
+        else if (key.equals("aim_players"))   return c.onlyPlayers;
+        return false;
+    }
+
+    private void aimToggle(String key) {
+        final AimAssistConfig c = AimAssist.cfg;
+        if      (key.equals("aim_smooth_on")) c.smoothAim = !c.smoothAim;
+        else if (key.equals("aim_silent"))    c.silent = !c.silent;
+        else if (key.equals("aim_require"))   c.requireClick = !c.requireClick;
+        else if (key.equals("aim_mobs"))      c.onlyMobs = !c.onlyMobs;
+        else if (key.equals("aim_players"))   c.onlyPlayers = !c.onlyPlayers;
+        c.save();
+    }
+
+    /** 90.0 -> "90", 0.3 -> "0.3", 0.05 -> "0.05". */
+    private static String fmt(float v) {
+        if (Math.abs(v - Math.floor(v)) < 0.005f)
+            return String.format(Locale.ROOT, "%d", (long)Math.floor(v));
+        String s = String.format(Locale.ROOT, "%.2f", v);
+        while (s.endsWith("0")) s = s.substring(0, s.length() - 1);
+        if (s.endsWith(".")) s = s.substring(0, s.length() - 1);
+        return s;
+    }
+
+    private void drawAimTab(int mx, int my) {
+        // master switch row
+        final int my0 = py + 38;
+        this.fontRendererObj.drawStringWithShadow("Aim assist", px + 10, my0 + 1, C_TEXT);
+        this.fontRendererObj.drawStringWithShadow(AimAssist.cfg.enabled
+                ? "steers your camera toward the closest target"
+                : "camera untouched", px + 72, my0 + 1, C_DIM);
+        final int msx = px + PW - 10 - 22;
+        drawSwitch(msx, my0, AimAssist.cfg.enabled, inRect(mx, my, msx, my0, 22, 11));
+        masterHit = new int[] { msx, my0 };
+
+        // two cards of sliders
+        drawAimCard(px + 8,   "TARGETING", AIM_LEFT,  mx, my);
+        drawAimCard(px + 125, "TURNING",   AIM_RIGHT, mx, my);
+
+        drawAimToggles(mx, my);
+        drawAimFooter(mx, my);
+    }
+
+    private int[] masterHit = null;
+
+    private void drawAimCard(int x, String title, AimSlider[] sliders, int mx, int my) {
+        final int y = py + 54, w = 111, h = 90;
+        glassRect(x, y, w, h, C_CARD, C_CARD_EDGE);
+        this.fontRendererObj.drawStringWithShadow(title, x + 6, y + 5, C_DIM);
+        for (int i = 0; i < sliders.length; i++) {
+            drawAimSliderRow(sliders[i], x + 6, y + 28 + i * 21, w - 12, mx, my);
+        }
+    }
+
+    private void drawAimSliderRow(AimSlider s, int x, int y, int w, int mx, int my) {
+        final float v = aimGet(s.key);
+        final String txt = fmt(v);
+        this.fontRendererObj.drawStringWithShadow(s.label, x, y, C_MUT);
+        final int vw = this.fontRendererObj.getStringWidth(txt);
+        this.fontRendererObj.drawStringWithShadow(txt, x + w - vw, y,
+                (aimDrag != null && aimDrag.equals(s.key)) ? accent | 0xFF000000 : C_TEXT);
+
+        final int ty = y + 11, th = 6;
+        drawRect(x, ty, x + w, ty + th, C_TRACK);
+        final float frac = Math.max(0.0f, Math.min(1.0f, (v - s.lo) / (s.hi - s.lo)));
+        final int pad = 3;
+        final int fillw = (int)(pad + frac * (w - 2 * pad));
+        if (fillw > 1) drawRect(x, ty, x + fillw, ty + th, (accent & 0xFFFFFF) | 0xE6000000);
+        final float kx = x + pad + frac * (w - 2 * pad);
+        circle(kx, ty + th / 2.0f, 4.0f, 0xFFF2F3F7);
+        circle(kx, ty + th / 2.0f, 4.0f - 0.75f, (accent & 0xFFFFFF) | 0x66FFFFFF);
+        circle(kx, ty + th / 2.0f, 4.0f - 1.5f, 0xFFF2F3F7);
+    }
+
+    private boolean aimSliderHit(AimSlider s, int x, int y, int w, int mx, int my, boolean apply) {
+        final int ty = y + 11;
+        if (my < ty - 2 || my > ty + 10) return false;
+        if (mx < x - 2 || mx > x + w + 2) return false;
+        if (apply) {
+            final float frac = Math.max(0.0f, Math.min(1.0f, (mx - x) / (float)w));
+            float v = s.lo + frac * (s.hi - s.lo);
+            if (s.isInt) v = Math.round(v);
+            if (v != aimGet(s.key)) aimSet(s.key, v);
+        }
+        return true;
+    }
+
+    private static final String[][] AIM_TOGGLES = {
+        { "aim_smooth_on", "Smooth aim" },
+        { "aim_silent",    "Silent" },
+        { "aim_require",   "Require click" },
+        { "aim_mobs",      "Only mobs" },
+        { "aim_players",   "Only players" },
+    };
+
+    private final Map<String, int[]> aimRowHit = new HashMap<String, int[]>();
+
+    private void drawAimToggles(int mx, int my) {
+        aimRowHit.clear();
+        final int y0 = py + 150;
+        for (int i = 0; i < AIM_TOGGLES.length; i++) {
+            final int col = i % 2, row = i / 2;
+            final int x = px + 8 + col * 117, y = y0 + row * 16;
+            final String key = AIM_TOGGLES[i][0];
+            final boolean val = aimToggleState(key);
+            this.fontRendererObj.drawStringWithShadow(AIM_TOGGLES[i][1], x, y + 1, C_TEXT);
+            final int sx = x + 89;
+            drawSwitch(sx, y, val, inRect(mx, my, sx, y, 22, 11));
+            aimRowHit.put(key, new int[] { sx, y });
+        }
+        // the empty sixth cell carries the hotkey hint
+        this.fontRendererObj.drawStringWithShadow("G toggles it", px + 8 + 117, y0 + 32 + 1, C_DIM);
+    }
+
+    private void drawAimFooter(int mx, int my) {
+        final int y = py + 212;
+        final String live = AimAssist.cfg.enabled
+                ? "assist on - it never clicks, only turns"
+                : "assist off - the exe does all the clicking";
+        this.fontRendererObj.drawStringWithShadow(live, px + 14, y + 1, AimAssist.cfg.enabled ? C_TEXT : C_DIM);
+        doneButton(mx, my);
+    }
+
     // ---- input --------------------------------------------------------------
     @Override
     protected void mouseClicked(int mx, int my, int btn) {
         if (btn != 0) return;
-        if (!linked || !haveCfg) {
-            if (inRect(mx, my, doneRect(), py + PH - 24, 44, 14)) close();
+
+        // tab pills — always available
+        for (Map.Entry<Integer, int[]> e : tabHit.entrySet()) {
+            final int[] r = e.getValue();
+            if (inRect(mx, my, r[0], r[1], r[2], 13)) {
+                if (tab != e.getKey()) {
+                    tab = e.getKey();
+                    dragKey = aimDrag = null;   // never carry a drag across tabs
+                }
+                return;
+            }
+        }
+        // Done — always available
+        if (inRect(mx, my, doneRect(), py + PH - 24, 44, 14)) { close(); return; }
+
+        // aim tab: edit the mod's own config
+        if (tab == 1) {
+            if (masterHit != null && inRect(mx, my, masterHit[0], masterHit[1], 22, 11)) {
+                AimAssist.toggle();             // flips + saves + announces
+                return;
+            }
+            if (aimCardClick(AIM_LEFT,  px + 8,   mx, my)) return;
+            if (aimCardClick(AIM_RIGHT, px + 125, mx, my)) return;
+            for (Map.Entry<String, int[]> e : aimRowHit.entrySet()) {
+                final int[] r = e.getValue();
+                if (inRect(mx, my, r[0], r[1], 22, 11)) {
+                    aimToggle(e.getKey());
+                    return;
+                }
+            }
             return;
         }
-        // Done
-        if (inRect(mx, my, doneRect(), py + PH - 24, 44, 14)) { close(); return; }
+
+        if (!linked || !haveCfg) return;
 
         // side cards
         handleSideClick(px + 8,   "left_enabled",  SIDE_SLIDERS,  mx, my);
@@ -504,8 +749,20 @@ public class AbaserConfigGui extends GuiScreen {
         }
     }
 
+    private boolean aimCardClick(AimSlider[] sliders, int x, int mx, int my) {
+        final int y = py + 54, w = 111;
+        for (int i = 0; i < sliders.length; i++) {
+            final int ry = y + 28 + i * 21;
+            if (aimSliderHit(sliders[i], x + 6, ry, w - 12, mx, my, true)) {
+                aimDrag = sliders[i].key;       // saved on release, like the exe sliders
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void handleSideClick(int x, String toggleKey, Slider[] sliders, int mx, int my) {
-        final int y = py + 22, w = 111;
+        final int y = py + 38, w = 111;
         // toggle
         final int sx = x + w - 6 - 22, sy = y + 15;
         if (inRect(mx, my, sx, sy, 22, 11)) { toggle(toggleKey, false); return; }
@@ -522,7 +779,21 @@ public class AbaserConfigGui extends GuiScreen {
 
     @Override
     protected void mouseClickMove(int mx, int my, int btn, long timeSinceLast) {
-        if (btn != 0 || dragKey == null) return;
+        if (btn != 0) return;
+        if (aimDrag != null) {
+            for (int a = 0; a < 2; a++) {
+                final AimSlider[] arr = a == 0 ? AIM_LEFT : AIM_RIGHT;
+                final int x = a == 0 ? px + 8 : px + 125;
+                for (int i = 0; i < arr.length; i++) {
+                    if (arr[i].key.equals(aimDrag)) {
+                        aimSliderHit(arr[i], x + 6, py + 54 + 28 + i * 21, 99, mx, my, true);
+                        return;
+                    }
+                }
+            }
+            return;
+        }
+        if (dragKey == null) return;
         if (dragKey.equals("left_max_cps") || dragKey.equals("left_min_cps") || dragKey.equals("hit_chance"))
             dragSide(SIDE_SLIDERS, px + 8, mx, my);
         else if (dragKey.equals("right_max_cps") || dragKey.equals("right_min_cps") || dragKey.equals("right_chance"))
@@ -534,7 +805,7 @@ public class AbaserConfigGui extends GuiScreen {
     private void dragSide(Slider[] sliders, int x, int mx, int my) {
         for (int i = 0; i < sliders.length; i++) {
             if (sliders[i].key.equals(dragKey)) {
-                sliderHit(sliders[i], x + 6, py + 52 + i * 22, 99, mx, my, true);
+                sliderHit(sliders[i], x + 6, py + 38 + 30 + i * 22, 99, mx, my, true);
                 return;
             }
         }
@@ -542,6 +813,11 @@ public class AbaserConfigGui extends GuiScreen {
 
     @Override
     protected void mouseReleased(int mx, int my, int state) {
+        if (aimDrag != null) {
+            aimDrag = null;
+            AimAssist.cfg.clamp();
+            AimAssist.cfg.save();
+        }
         if (dragKey != null) { dragKey = null; sendWork(); }
     }
 

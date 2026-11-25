@@ -1,3 +1,5 @@
-# Abaser -- the in-game panel keybind (the clicking lives in the standalone exe)
+# Abaser -- keybinds (the clicking lives in the standalone exe;
+# the aim assist is the mod's own client-side camera nudge)
 key.categories.abaser=Abaser
 key.abaser.panel=Open the Abaser panel
+key.abaser.aimassist=Toggle the aim assist

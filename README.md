@@ -7,7 +7,7 @@ and releases them together, automatically, on every push to `develop`:
 | Deliverable | What it is |
 |---|---|
 | **`Abaser-Clicker-<version>-win64.exe`** | The auto-clicker. Win32 + Dear ImGui + DirectX 9, one file, no runtimes, no install. |
-| `Abaser-1.8.8-<version>.jar` | Companion mod — loads with Forge, starts the exe with your server, feeds it live game state, closes it with the game. **It does not click.** |
+| `Abaser-1.8.8-<version>.jar` | Companion mod — loads with Forge, starts the exe with your server, feeds it live game state, closes it with the game, and carries the **aim assist** (client-side camera steering). **It does not click.** |
 
 ## Abaser Clicker (the exe)
 
@@ -22,6 +22,7 @@ no focus games, no misclicks into your browser.
 | Right toggle | **F4** | Arm/disarm the right clicker (same key by default — rebind to split) |
 | Hide window | **INSERT** | Hide/show the Abaser window (clickers keep running) |
 | Open in-game panel | **Right Shift** (in the mod) | The companion mod's in-game panel — see "The mod link" |
+| Aim assist | **G** (in the mod, rebindable) | Toggle the aim assist — the mod's client-side camera nudge, see "Aim assist" |
 
 Everything is in the UI: randomized CPS min/max per side, hit chance,
 Block Hit (sword-block taps), the two-color theme, rebindable keys.
@@ -111,15 +112,50 @@ anything.
 
 See `exe/README.md` for the full details.
 
+## Aim assist — the mod's camera nudge (client-side)
+
+Abaser absorbed the classic MOG-AIMASSIST client mod and rebuilt it into the
+panel. The aim assist is the one engine that lives **inside the mod**: each
+client tick it finds the closest valid target and turns your own camera a
+fraction of the way toward it. It steers your view and nothing else — it
+never presses a button. Every click still comes from the exe, from its own
+engine and its own hotkeys; the two never touch each other's work.
+
+| Feature | What it does |
+|---|---|
+| **Target search** | Closest living entity within **Distance** blocks **and** inside the **FOV** cone (both measured around where you look) |
+| **Only mobs / Only players** | Independent filters; both off = everything living passes |
+| **Strength** | Overall pull toward the target (0–1) |
+| **Vertical / Horizontal** | Extra multipliers so you can keep pitch calmer than yaw |
+| **Smooth aim** | Turn only **Smooth** of the remaining angle per tick — a flick, not a snap |
+| **Silent aim** | Apply the same turn through the mouse's own entry point (`setAngles`) instead of writing the rotation fields |
+| **Require click** | Only assist while the attack key is held |
+
+Controls and storage:
+
+- **G** toggles it (rebindable in Controls, `key.abaser.aimassist`);
+  `/abaser aim` (or `aim on` / `aim off`) does the same from chat;
+- the panel's **Aim Assist tab** (Right Shift) exposes every knob with the
+  same glass sliders and toggles as the Clicker tab;
+- settings persist in the game's `config/abaser_aim.json` — mod-owned,
+  clamped on load and on every edit, and never sent over the mod link
+  (the exe has nothing to do with them).
+
+Guards: the assist is dormant while **any screen is open** (inventory,
+chest, villager, enderchest, chat, the Abaser panel itself), while you are
+dead and while no world is loaded. It runs purely client-side; the server
+only sees the resulting look angles.
+
 ## The companion mod (the jar)
 
 The 1.8.8 Forge mod in this repository used to contain the auto-clicker.
-It doesn't anymore — the clicking lives in the exe, and the mod's whole job
-is the **mod link** above: start the exe with the server, feed it game
-state over stdin, stop it when the game closes, and give you the
-**in-game panel** (Right Shift, or `/abaser panel`) so you can manage and
-configure the clicker without leaving the game. `/abaser` in chat explains
-the wiring.
+It doesn't anymore — the clicking lives in the exe, and the mod's jobs are
+the **mod link** above (start the exe with the server, feed it game state
+over stdin, stop it when the game closes), the **in-game panel**
+(Right Shift, or `/abaser panel`) so you can manage and configure the
+clicker without leaving the game, and the **aim assist** above — the one
+piece of Abaser that steers your camera from inside the mod, client-side.
+`/abaser` in chat explains the wiring.
 
 ## Layout
 
