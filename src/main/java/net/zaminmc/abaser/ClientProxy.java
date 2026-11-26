@@ -46,6 +46,8 @@ public class ClientProxy extends CommonProxy {
         // TickEvents ride the FML bus in 1.8.8, not the forge bus
         FMLCommonHandler.instance().bus().register(new ClientTickHandler());
         FMLCommonHandler.instance().bus().register(AimAssist.instance());
+        // the peace/team list parser rides the real forge bus (chat events)
+        net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(new PeaceList());
         // game closing -> clicker closes with it (the exe also exits on stdin
         // EOF, so this hook is the polite path, not the only path)
         Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {

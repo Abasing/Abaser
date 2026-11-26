@@ -38,7 +38,7 @@ import net.minecraft.client.renderer.GlStateManager;
 public class AbaserConfigGui extends GuiScreen {
 
     // ---- panel geometry (scaled px) ---------------------------------------
-    private static final int PW = 244, PH = 252;
+    private static final int PW = 244, PH = 268;
 
     // ---- palette (matches the exe's glass) ---------------------------------
     private static final int C_BACKDROP   = 0x78000000;
@@ -158,7 +158,7 @@ public class AbaserConfigGui extends GuiScreen {
         put("hit_chance", "87");     put("right_chance", "80");
         put("blockhit", "false");    put("blockhit_chance", "6");
         put("hold_mode", "true");    put("require_focus", "true");
-        put("legacy_timing", "false");
+        put("legacy_timing", "false"); put("spawn_gate", "true");
         put("left_enabled", "false"); put("right_enabled", "false");
         put("theme_primary", "16726169"); put("theme_accent", "16726169");
     }
@@ -205,6 +205,7 @@ public class AbaserConfigGui extends GuiScreen {
         add(sb, "hold_mode",        getB("hold_mode", true) ? "true" : "false");
         add(sb, "require_focus",    getB("require_focus", true) ? "true" : "false");
         add(sb, "legacy_timing",    getB("legacy_timing", false) ? "true" : "false");
+        add(sb, "spawn_gate",       getB("spawn_gate", true) ? "true" : "false");
         add(sb, "left_enabled",     getB("left_enabled", false) ? "true" : "false");
         add(sb, "right_enabled",    getB("right_enabled", false) ? "true" : "false");
         add(sb, "theme_primary",    String.valueOf(getThemePrimary()));
@@ -417,29 +418,32 @@ public class AbaserConfigGui extends GuiScreen {
     }
 
     private void drawActivationCard(int mx, int my) {
-        final int x = px + 8, y = py + 140, w = 228, h = 50;
+        final int x = px + 8, y = py + 140, w = 228, h = 66;
         glassRect(x, y, w, h, C_CARD, C_CARD_EDGE);
         final int ax0 = x + 6, ax1 = x + w - 6;
         final int col2 = ax0 + 110;
 
         // row 1
-        toggleRow("Hold to click", "hold_mode", true, ax0, y + 5, ax0 + 104, mx, my);
-        toggleRow("Focus gate", "require_focus", true, col2, y + 5, ax1, mx, my);
+        toggleRow("Hold to click", "hold_mode", true, ax0, y + 4, ax0 + 104, mx, my);
+        toggleRow("Focus gate", "require_focus", true, col2, y + 4, ax1, mx, my);
         // row 2
-        toggleRow("Legacy timing", "legacy_timing", false, ax0, y + 20, ax0 + 104, mx, my);
-        toggleRow("Block hit", "blockhit", false, col2, y + 20, ax1, mx, my);
-        // row 3 — block-hit chance, only meaningful while block hit is on
-        final int ry = y + 34;
+        toggleRow("Legacy timing", "legacy_timing", false, ax0, y + 18, ax0 + 104, mx, my);
+        toggleRow("Block hit", "blockhit", false, col2, y + 18, ax1, mx, my);
+        // row 3 — the two new click gates
+        toggleRow("Ally hold", "allyHold", true, ax0, y + 32, ax0 + 104, mx, my);
+        toggleRow("Spawn gate", "spawn_gate", true, col2, y + 32, ax1, mx, my);
+        // row 4 — block-hit chance, only meaningful while block hit is on
+        final int ry = y + 46;
         if (getB("blockhit", false)) {
             drawSliderRow(BLOCK_CHANCE, bhX(), bhY(), bhW(), mx, my);
         } else {
-            this.fontRendererObj.drawStringWithShadow("Sword-block taps ride along with left clicks.", ax0 + 6, ry, C_DIM);
+            this.fontRendererObj.drawStringWithShadow("No clicks inside spawn or with an ally under the crosshair.", ax0 + 6, ry, C_DIM);
         }
     }
 
     // block-hit chance slider geometry — shared by draw / click / drag
     private int bhX() { return px + 20; }
-    private int bhY() { return py + 174; }
+    private int bhY() { return py + 186; }
     private int bhW() { return 210; }
 
     private void toggleRow(String label, String key, boolean def, int x, int y, int rowRight, int mx, int my) {
@@ -491,7 +495,7 @@ public class AbaserConfigGui extends GuiScreen {
     }
 
     private void drawFooter(int mx, int my) {
-        final int y = py + 212;
+        final int y = py + 232;
         // live line, dot + "x.x L / y.y R cps"
         final boolean armed = getB("left_enabled", false) || getB("right_enabled", false);
         final String live = String.format(Locale.ROOT, "%.1f L / %.1f R cps live",
@@ -502,6 +506,9 @@ public class AbaserConfigGui extends GuiScreen {
         // the same honesty the exe's footer has: say WHY nothing clicks
         String why = null; int whyCol = C_DIM;
         if (LinkState.guiOpen)            { why = "paused - a menu is open"; whyCol = C_WARN; }
+        else if (getB("spawn_gate", true) && AimAssist.inSpawn)
+                                          { why = "paused - inside spawn";  whyCol = C_WARN; }
+        else if (AimAssist.allyCross)     { why = "paused - ally in crosshair"; whyCol = C_WARN; }
         else if (LinkState.holdingBow)    { why = "paused - bow drawn";      whyCol = C_WARN; }
         else {
             why = "RSHIFT opens this panel";
@@ -550,8 +557,9 @@ public class AbaserConfigGui extends GuiScreen {
         if      (key.equals("aim_smooth_on")) return c.smoothAim;
         else if (key.equals("aim_silent"))    return c.silent;
         else if (key.equals("aim_require"))   return c.requireClick;
-        else if (key.equals("aim_mobs"))      return c.onlyMobs;
-        else if (key.equals("aim_players"))   return c.onlyPlayers;
+        else if (key.equals("aim_spawn"))     return c.spawnBlockAim;
+        else if (key.equals("aim_lock"))      return c.lockEnabled;
+        else if (key.equals("aim_ally"))      return c.allyHold;
         return false;
     }
 
@@ -560,8 +568,9 @@ public class AbaserConfigGui extends GuiScreen {
         if      (key.equals("aim_smooth_on")) c.smoothAim = !c.smoothAim;
         else if (key.equals("aim_silent"))    c.silent = !c.silent;
         else if (key.equals("aim_require"))   c.requireClick = !c.requireClick;
-        else if (key.equals("aim_mobs"))      c.onlyMobs = !c.onlyMobs;
-        else if (key.equals("aim_players"))   c.onlyPlayers = !c.onlyPlayers;
+        else if (key.equals("aim_spawn"))     c.spawnBlockAim = !c.spawnBlockAim;
+        else if (key.equals("aim_lock"))      c.lockEnabled = !c.lockEnabled;
+        else if (key.equals("aim_ally"))      c.allyHold = !c.allyHold;
         c.save();
     }
 
@@ -576,12 +585,17 @@ public class AbaserConfigGui extends GuiScreen {
     }
 
     private void drawAimTab(int mx, int my) {
-        // master switch row
+        // master switch row (live target name when the assist is on)
         final int my0 = py + 38;
         this.fontRendererObj.drawStringWithShadow("Aim assist", px + 10, my0 + 1, C_TEXT);
-        this.fontRendererObj.drawStringWithShadow(AimAssist.cfg.enabled
-                ? "steers your camera toward the closest target"
-                : "camera untouched", px + 72, my0 + 1, C_DIM);
+        String sub;
+        if (!AimAssist.cfg.enabled) {
+            sub = "camera untouched";
+        } else {
+            final String t = AimAssist.targetName();
+            sub = t != null ? ("target: " + t) : "searching...";
+        }
+        this.fontRendererObj.drawStringWithShadow(sub, px + 72, my0 + 1, C_DIM);
         final int msx = px + PW - 10 - 22;
         drawSwitch(msx, my0, AimAssist.cfg.enabled, inRect(mx, my, msx, my0, 22, 11));
         masterHit = new int[] { msx, my0 };
@@ -642,8 +656,9 @@ public class AbaserConfigGui extends GuiScreen {
         { "aim_smooth_on", "Smooth aim" },
         { "aim_silent",    "Silent" },
         { "aim_require",   "Require click" },
-        { "aim_mobs",      "Only mobs" },
-        { "aim_players",   "Only players" },
+        { "aim_spawn",     "No aim in spawn" },
+        { "aim_lock",      "Lock-in mode" },
+        { "aim_ally",      "Ally hold" },
     };
 
     private final Map<String, int[]> aimRowHit = new HashMap<String, int[]>();
@@ -661,16 +676,20 @@ public class AbaserConfigGui extends GuiScreen {
             drawSwitch(sx, y, val, inRect(mx, my, sx, y, 22, 11));
             aimRowHit.put(key, new int[] { sx, y });
         }
-        // the empty sixth cell carries the hotkey hint
-        this.fontRendererObj.drawStringWithShadow("G toggles it", px + 8 + 117, y0 + 32 + 1, C_DIM);
     }
 
     private void drawAimFooter(int mx, int my) {
-        final int y = py + 212;
-        final String live = AimAssist.cfg.enabled
-                ? "assist on - it never clicks, only turns"
-                : "assist off - the exe does all the clicking";
-        this.fontRendererObj.drawStringWithShadow(live, px + 14, y + 1, AimAssist.cfg.enabled ? C_TEXT : C_DIM);
+        final int y = py + 232;
+        // live exception bookkeeping: what the assist refuses to target
+        final String live = String.format(Locale.ROOT,
+                "peace %d manual %d lock %s",
+                PeaceList.size(),
+                AimAssist.cfg.manualExceptions.size(),
+                AimAssist.cfg.lockEnabled
+                        ? (AimAssist.cfg.lockNames.isEmpty() ? "empty"
+                           : String.valueOf(AimAssist.cfg.lockNames.size()))
+                        : "off");
+        this.fontRendererObj.drawStringWithShadow(live, px + 14, y + 1, C_MUT);
         doneButton(mx, my);
     }
 
@@ -725,6 +744,12 @@ public class AbaserConfigGui extends GuiScreen {
                 else if (e.getKey().equals("require_focus")) toggle("require_focus", true);
                 else if (e.getKey().equals("legacy_timing")) toggle("legacy_timing", false);
                 else if (e.getKey().equals("blockhit")) toggle("blockhit", false);
+                else if (e.getKey().equals("spawn_gate")) toggle("spawn_gate", true);
+                else if (e.getKey().equals("allyHold")) {
+                    // mod-owned: lives in config/abaser_aim.json, not the exe
+                    AimAssist.cfg.allyHold = !AimAssist.cfg.allyHold;
+                    AimAssist.cfg.save();
+                }
                 return;
             }
         }

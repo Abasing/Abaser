@@ -33,13 +33,18 @@ import net.minecraftforge.fml.common.gameevent.TickEvent;
  *
  *   1. start the exe (hidden in the system tray) when a server/world loads,
  *   2. feed it live game state over stdin, one JSON line per change:
- *          {"gui":true,"bow":false,"held":"item.bow"}
- *      "gui" — ANY in-game screen is open (inventory, chest, villager,
- *              enderchest, chat, pause menu, ...) -> the exe blocks all
- *              clicks while that is true;
- *      "bow" — the player is holding a bow -> the exe holds its right-click
- *              output (right autoclicker and Block Hit taps) so charging the
- *              bow behaves normally; left clicks are untouched;
+ *          {"gui":true,"bow":false,"held":"item.bow","spawn":false,"ally":false}
+ *      "gui"   — ANY in-game screen is open (inventory, chest, villager,
+ *                enderchest, chat, pause menu, ...) -> the exe blocks all
+ *                clicks while that is true;
+ *      "spawn" — the player stands inside the configured spawn box -> the
+ *                exe blocks all clicks while its spawn_gate setting is on;
+ *      "ally"  — a team member (peace list or manual exception) is under
+ *                the crosshair -> the exe blocks all clicks so you never
+ *                hit friends while spamming;
+ *      "bow"   — the player is holding a bow -> the exe holds its right-click
+ *                output (right autoclicker and Block Hit taps) so charging the
+ *                bow behaves normally; left clicks are untouched;
  *   3. read what the exe answers on stdout (its settings snapshot and a 2 s
  *      live status) so the in-game panel can show and edit the SAME
  *      settings the exe edits — see AbaserConfigGui;
@@ -60,6 +65,8 @@ public class ClientTickHandler {
     private static boolean launchFailed;    // complained once about a missing exe
     private static boolean lastGui;
     private static boolean lastBow;
+    private static boolean lastSpawn;
+    private static boolean lastAlly;
     private static String  lastHeld = "";
     private static boolean haveLast;
     private static int     ticksSinceSend;
@@ -99,6 +106,8 @@ public class ClientTickHandler {
         // ---- 2. feed state: any open GUI + what the player is holding ----
         boolean gui;
         boolean bow = false;
+        boolean spawn = false;
+        boolean ally = false;
         String held = "";
         if (!inWorld) {
             gui = true;                       // menus / loading screens: suppress
@@ -110,14 +119,24 @@ public class ClientTickHandler {
                 bow = (item == Items.bow);
                 held = item.getUnlocalizedName();
             }
+            // measured by the aim assist's tick (one tick of latency is fine):
+            // spawn — the player stands inside the exact 3D spawn box;
+            // ally  — a peace/manual-exception player is under the crosshair.
+            // The exe holds EVERY click while either is true (spawn only while
+            // its spawn_gate setting is on). STATE ONLY — never a click.
+            spawn = AimAssist.inSpawn;
+            ally  = AimAssist.allyCross;
         }
 
-        final boolean changed = !haveLast || gui != lastGui || bow != lastBow || !held.equals(lastHeld);
+        final boolean changed = !haveLast || gui != lastGui || bow != lastBow
+                || spawn != lastSpawn || ally != lastAlly || !held.equals(lastHeld);
         if (changed || ++ticksSinceSend >= 40) {   // send on change + a 2 s heartbeat
-            sendState(gui, bow, held);
+            sendState(gui, bow, held, spawn, ally);
             lastGui = gui;
             lastBow = bow;
             lastHeld = held;
+            lastSpawn = spawn;
+            lastAlly = ally;
             haveLast = true;
             ticksSinceSend = 0;
         }
@@ -280,9 +299,10 @@ public class ClientTickHandler {
         return null;
     }
 
-    private static void sendState(boolean gui, boolean bow, String held) {
-        StringBuilder sb = new StringBuilder(96);
+    private static void sendState(boolean gui, boolean bow, String held, boolean spawn, boolean ally) {
+        StringBuilder sb = new StringBuilder(112);
         sb.append("{\"gui\":").append(gui).append(",\"bow\":").append(bow);
+        sb.append(",\"spawn\":").append(spawn).append(",\"ally\":").append(ally);
         if (held != null && held.length() > 0) sb.append(",\"held\":\"").append(held).append('"');
         sb.append("}\n");
         try {

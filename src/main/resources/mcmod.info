@@ -2,7 +2,7 @@
 {
   "modid": "abaser",
   "name": "Abaser",
-  "description": "Companion mod for the standalone Abaser Clicker executable. The mod starts the exe in your system tray when a world loads, feeds it live game state (open GUIs, held item) so it holds its clicks in menus and while a bow is drawn, opens a small in-game panel (Right Shift) that edits the exe's settings through the link, and stops it when the game closes. It also carries the aim assist: a client-side camera nudge (FOV cone, distance, smooth/silent aim, mob/player filters) tuned from the panel's Aim Assist tab — it steers your view only and never clicks.",
+  "description": "Companion mod for the standalone Abaser Clicker executable. The mod starts the exe in your system tray when a world loads, feeds it live game state (open GUIs, held item) so it holds its clicks in menus and while a bow is drawn, opens a small in-game panel (Right Shift) that edits the exe's settings through the link, and stops it when the game closes. It also carries the aim assist: a client-side camera nudge aimed at players only — with a parsed peace/team list, manual exceptions, a lock-in mode, and spawn-box gates — tuned from the panel's Aim Assist tab. It steers your view only and never clicks.",
   "version": "${version}",
   "mcversion": "${mcversion}",
   "authorList": ["Abasing"],

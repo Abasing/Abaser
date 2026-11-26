@@ -7,7 +7,7 @@ and releases them together, automatically, on every push to `develop`:
 | Deliverable | What it is |
 |---|---|
 | **`Abaser-Clicker-<version>-win64.exe`** | The auto-clicker. Win32 + Dear ImGui + DirectX 9, one file, no runtimes, no install. |
-| `Abaser-1.8.8-<version>.jar` | Companion mod — loads with Forge, starts the exe with your server, feeds it live game state, closes it with the game, and carries the **aim assist** (client-side camera steering). **It does not click.** |
+| `Abaser-1.8.8-<version>.jar` | Companion mod — loads with Forge, starts the exe with your server, feeds it live game state (GUIs, bow, spawn box, ally under crosshair), closes it with the game, and carries the **aim assist** (client-side camera steering, players only, with peace-list / manual / lock-in exceptions). **It does not click.** |
 
 ## Abaser Clicker (the exe)
 
@@ -47,6 +47,11 @@ Improvements over the classic external clicker it descends from:
   exits; a second launch just summons the first
 - **start with Windows** — one checkbox (Settings tab or tray menu) writes
   a per-user Run entry that launches it straight into the tray
+- **spawn + ally gates** — the mod's link can hold EVERY click while you
+  stand inside your spawn box (`spawn_gate` setting, on by default) or while
+  a team member is under your crosshair, so you never hit friends while
+  spamming; the footer tells you which gate is holding ("inside spawn",
+  "ally under crosshair")
 - **seamless glass UI** — a frameless window (no native title bar): the
   same glass canvas runs under the whole top band, with drawn minimize /
   close buttons and a drag-anywhere band
@@ -65,10 +70,17 @@ companion mod closes that gap with a stdin link:
   `AbaserClicker.exe --managed /tray` — it appears directly in the system
   tray (game folder or `mods/` folder, or `$ABASER_EXE`);
 - on every change (plus a 2 s heartbeat) the mod writes one JSON line to
-  the exe's stdin: `{"gui":true,"bow":false,"held":"item.bow"}`;
+  the exe's stdin:
+  `{"gui":true,"bow":false,"held":"item.bow","spawn":false,"ally":false}`;
 - the exe's click gates (shared code, regression-tested in the simulator):
   * **any open GUI** — inventory, chest, villager, enderchest, chat, pause
     menu, everything — blocks **all** clicks;
+  * **inside the spawn box** (the mod measures an exact 3D box, editable
+    with `/abaser spawn`) blocks **all** clicks while the exe's
+    `spawn_gate` setting is on — toggle it in the panel's Clicker tab;
+  * **an ally under the crosshair** — peace-list or manually excepted
+    player — blocks **all** clicks so you never hit friends while
+    spamming (the "Ally hold" toggle);
   * **holding a bow** blocks every right-click emission (the right
     autoclicker *and* Block Hit taps) so charging works normally; left
     clicks keep going;
@@ -116,46 +128,61 @@ See `exe/README.md` for the full details.
 
 Abaser absorbed the classic MOG-AIMASSIST client mod and rebuilt it into the
 panel. The aim assist is the one engine that lives **inside the mod**: each
-client tick it finds the closest valid target and turns your own camera a
-fraction of the way toward it. It steers your view and nothing else — it
+client tick it finds the closest valid **player** and turns your own camera a
+fraction of the way toward them. It steers your view and nothing else — it
 never presses a button. Every click still comes from the exe, from its own
-engine and its own hotkeys; the two never touch each other's work.
+engine and its own hotkeys; the two never touch each other's work. (The mob
+assist was removed — targeting is players-only.)
 
 | Feature | What it does |
 |---|---|
-| **Target search** | Closest living entity within **Distance** blocks **and** inside the **FOV** cone (both measured around where you look) |
-| **Only mobs / Only players** | Independent filters; both off = everything living passes |
+| **Target search** | Closest valid player within **Distance** blocks **and** inside the **FOV** cone (both measured around where you look) |
+| **Target stickiness** | The current target is KEPT while it stays valid (hysteresis on distance + FOV); the assist only re-scans when it drops out — no flip-flopping between players |
 | **Strength** | Overall pull toward the target (0–1) |
 | **Vertical / Horizontal** | Extra multipliers so you can keep pitch calmer than yaw |
 | **Smooth aim** | Turn only **Smooth** of the remaining angle per tick — a flick, not a snap |
 | **Silent aim** | Apply the same turn through the mouse's own entry point (`setAngles`) instead of writing the rotation fields |
 | **Require click** | Only assist while the attack key is held |
+| **Peace/team exceptions** | The mod parses the server's `You have peace with N player(s)` chat block (`- Name` lines follow) and never targets those players — live in memory, refreshed each time the server re-announces |
+| **Manual exceptions** | `/abaser except add|remove NAME` — players the assist (and the clicks) always skip; persisted |
+| **Lock-in mode** | `/abaser lock on` + `lock add NAME` — ONLY those names are targeted, no one else; persisted, toggled in the panel too |
+| **Spawn gates** | An exact 3D box (two corners): **no aim assist** inside it (Aim tab) and **no clicks** inside it (`spawn_gate`, Clicker tab) — both on by default |
 
 Controls and storage:
 
 - **G** toggles it (rebindable in Controls, `key.abaser.aimassist`);
   `/abaser aim` (or `aim on` / `aim off`) does the same from chat;
 - the panel's **Aim Assist tab** (Right Shift) exposes every knob with the
-  same glass sliders and toggles as the Clicker tab;
-- settings persist in the game's `config/abaser_aim.json` — mod-owned,
+  same glass sliders and toggles as the Clicker tab — plus a live
+  `target: <name>` readout and a `peace N manual N lock N` counter line;
+- the default spawn box is the measured SKYPVP spawn
+  (`-23.52 57.00 23.67` to `23.65 58.00 -22.35`, exact 3D test); move it
+  with `/abaser spawn here [halfwidth]` (re-centers around you),
+  `/abaser spawn box X1 Y1 Z1 X2 Y2 Z2` (exact corners) or
+  `/abaser spawn show`;
+- `/abaser peace` dumps the currently parsed peace list;
+- aim settings persist in the game's `config/abaser_aim.json` — mod-owned,
   clamped on load and on every edit, and never sent over the mod link
-  (the exe has nothing to do with them).
+  (the exe has nothing to do with them); exception and lock-in lists ride
+  along in the same file.
 
 Guards: the assist is dormant while **any screen is open** (inventory,
 chest, villager, enderchest, chat, the Abaser panel itself), while you are
-dead and while no world is loaded. It runs purely client-side; the server
-only sees the resulting look angles.
+dead, while no world is loaded, and inside the spawn box while the aim gate
+is on. It runs purely client-side; the server only sees the resulting look
+angles. Switching worlds clears the parsed peace list — a new server's
+allies mean nothing on the next one.
 
 ## The companion mod (the jar)
 
 The 1.8.8 Forge mod in this repository used to contain the auto-clicker.
 It doesn't anymore — the clicking lives in the exe, and the mod's jobs are
 the **mod link** above (start the exe with the server, feed it game state
-over stdin, stop it when the game closes), the **in-game panel**
-(Right Shift, or `/abaser panel`) so you can manage and configure the
-clicker without leaving the game, and the **aim assist** above — the one
-piece of Abaser that steers your camera from inside the mod, client-side.
-`/abaser` in chat explains the wiring.
+— GUIs, bow, spawn box, ally under crosshair — over stdin, stop it when
+the game closes), the **in-game panel** (Right Shift, or `/abaser panel`)
+so you can manage and configure the clicker without leaving the game, and
+the **aim assist** above — the one piece of Abaser that steers your camera
+from inside the mod, client-side. `/abaser` in chat explains the wiring.
 
 ## Layout
 
