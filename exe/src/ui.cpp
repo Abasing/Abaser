@@ -871,10 +871,16 @@ void DrawUI(const AbaserUIHost& host, const char* version)
 
         // the right hint tells you WHY nothing is clicking when the mod pauses it
         char hint[128];
-        const bool paused_menu = host.mod_linked && host.mod_gui_open;
-        const bool paused_bow  = host.mod_linked && host.mod_holding_bow && !paused_menu;
+        const bool paused_menu  = host.mod_linked && host.mod_gui_open;
+        const bool paused_spawn = host.mod_linked && spawn_gate && host.mod_in_spawn && !paused_menu;
+        const bool paused_ally  = host.mod_linked && host.mod_ally_crosshair && !paused_menu && !paused_spawn;
+        const bool paused_bow   = host.mod_linked && host.mod_holding_bow && !paused_menu && !paused_spawn && !paused_ally;
         if (paused_menu) {
             snprintf(hint, sizeof(hint), "%s", VSTR("paused - a menu is open"));
+        } else if (paused_spawn) {
+            snprintf(hint, sizeof(hint), "%s", VSTR("paused - inside spawn"));
+        } else if (paused_ally) {
+            snprintf(hint, sizeof(hint), "%s", VSTR("paused - ally under crosshair"));
         } else if (paused_bow) {
             snprintf(hint, sizeof(hint), "%s", VSTR("paused - bow drawn"));
         } else {

@@ -264,16 +264,21 @@ static void ClickerThread()
 // The companion Forge mod starts this exe with "--managed" when a server
 // loads and feeds one JSON line per state change over stdin:
 //
-//     {"gui":true,"bow":false,"held":"item.bow"}
+//     {"gui":true,"bow":false,"held":"item.bow","spawn":false,"ally":false}
 //
 // The mod NEVER clicks — this exe still does all of its own clicking, the
 // mod only reports what it can see inside the game:
-//   * "gui"  — any in-game GUI/screen is open (inventory, chest, villager,
-//              enderchest, chat, pause menu, ...) -> block every click;
-//   * "bow"  — the player is holding a bow -> hold all right-click output
-//              (the right autoclicker and Block Hit) so charging stays
-//              normal; left clicks are untouched;
-//   * "exit" — the game is closing -> shut down gracefully.
+//   * "gui"   — any in-game GUI/screen is open (inventory, chest, villager,
+//               enderchest, chat, pause menu, ...) -> block every click;
+//   * "spawn" — the player stands inside the configured spawn box -> block
+//               every click while the spawn_gate setting is on;
+//   * "ally"  — a team member (peace list or a manual exception) is under
+//               the crosshair -> block every click so you never hit friends
+//               while spamming;
+//   * "bow"   — the player is holding a bow -> hold all right-click output
+//               (the right autoclicker and Block Hit) so charging stays
+//               normal; left clicks are untouched;
+//   * "exit"  — the game is closing -> shut down gracefully.
 // stdin EOF (game process gone, even after a crash) is a fallback exit.
 //
 // The link also carries SETTINGS (the in-game panel): the mod may send
@@ -347,8 +352,12 @@ static void ModLinkThread()
 
             const int gui = ModJsonFlag(line, "gui");
             const int bow = ModJsonFlag(line, "bow");
-            if (gui >= 0) mod_gui_open    = gui != 0;
-            if (bow >= 0) mod_holding_bow = bow != 0;
+            const int spawn = ModJsonFlag(line, "spawn");
+            const int ally  = ModJsonFlag(line, "ally");
+            if (gui >= 0)   mod_gui_open        = gui != 0;
+            if (bow >= 0)   mod_holding_bow     = bow != 0;
+            if (spawn >= 0) mod_in_spawn        = spawn != 0;
+            if (ally >= 0)  mod_ally_crosshair  = ally != 0;
             g_mod_linked = true;
 
             if (first_contact)
@@ -905,6 +914,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         host.mod_linked      = g_mod_linked.load();
         host.mod_gui_open    = mod_gui_open;
         host.mod_holding_bow = mod_holding_bow;
+        host.mod_in_spawn    = mod_in_spawn;
+        host.mod_ally_crosshair = mod_ally_crosshair;
 
         DrawUI(host, ABASER_VERSION);
 

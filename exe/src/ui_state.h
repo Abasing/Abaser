@@ -109,6 +109,8 @@ inline ImVec4 OnColor(const ImVec4& bg) { return Luma01(bg) > 0.55f ? ImVec4(0.1
 // the exe runs standalone, everything stays false — the gates are wide open.
 inline bool mod_gui_open    = false;   // any in-game GUI/screen is open
 inline bool mod_holding_bow = false;   // the player is holding a bow
+inline bool mod_in_spawn    = false;   // the player stands inside the spawn box
+inline bool mod_ally_crosshair = false; // a team member / excepted player is under the crosshair
 
 // --- slider limits ----------------------------------------------------------
 static const float CPS_LO = 1.0f,  CPS_HI = 25.0f;
@@ -129,6 +131,7 @@ inline int    blockhit_chance  = 6;
 inline bool   hold_mode        = true;   // click only while the physical button is held
 inline bool   require_focus    = true;   // no clicks into an unfocused game window
 inline bool   legacy_timing    = false;  // reproduce the classic's ~2x CPS math
+inline bool   spawn_gate       = true;   // hold all clicks while the mod reports "inside spawn"
 inline bool   other_background = true;   // "dim backdrop" — darkens the gradient
 inline int    hide_bind        = 45;     // VK_INSERT
 
@@ -140,20 +143,28 @@ inline int    g_tab            = 0;
 // The click gates — the single policy both the engine and the simulator test:
 //   * an open GUI blocks EVERYTHING (inventory, chest, villager, enderchest,
 //     chat, pause menu — any screen at all),
+//   * inside the spawn box (when the spawn_gate setting is on) blocks
+//     EVERYTHING — the mod measures the box and sends "spawn":true,
+//   * an ally under the crosshair (team member, peace list or a manual
+//     exception — the mod decides) blocks EVERYTHING so you never hit friends
+//     while spamming,
 //   * a drawn bow blocks every RIGHT-click emission (the right autoclicker
 //     and Block Hit's sword-block taps) so charging feels normal; left clicks
 //     are untouched.
 inline bool GateLeft(bool base_ok, bool hold_key_down)
 {
-    return base_ok && !mod_gui_open && (!hold_mode || hold_key_down);
+    return base_ok && !mod_gui_open && !(spawn_gate && mod_in_spawn)
+        && !mod_ally_crosshair && (!hold_mode || hold_key_down);
 }
 inline bool GateRight(bool base_ok, bool hold_key_down)
 {
-    return base_ok && !mod_gui_open && !mod_holding_bow && (!hold_mode || hold_key_down);
+    return base_ok && !mod_gui_open && !(spawn_gate && mod_in_spawn)
+        && !mod_ally_crosshair && !mod_holding_bow && (!hold_mode || hold_key_down);
 }
 inline bool GateBlockHit()
 {
-    return !mod_gui_open && !mod_holding_bow;
+    return !mod_gui_open && !(spawn_gate && mod_in_spawn)
+        && !mod_ally_crosshair && !mod_holding_bow;
 }
 
 inline unsigned long long g_left_total  = 0;   // lifetime counters (engine-side)
@@ -302,6 +313,7 @@ inline void ResetDefaults()
     hold_mode        = true;
     require_focus    = true;
     legacy_timing    = false;
+    spawn_gate       = true;
     other_background = true;
     theme_primary    = 0xFF3899u;
     theme_accent     = 0xFF3899u;
@@ -327,6 +339,7 @@ inline void ApplyConfigKey(const std::string& key, const std::string& val)
     else if (key == "hold_mode")        hold_mode        = (val == "true" || val == "1");
     else if (key == "require_focus")    require_focus    = (val == "true" || val == "1");
     else if (key == "legacy_timing")    legacy_timing    = (val == "true" || val == "1");
+    else if (key == "spawn_gate")       spawn_gate       = (val == "true" || val == "1");
     else if (key == "other_background") other_background = (val == "true" || val == "1");
     else if (key == "left_enabled")     left_enabled     = (val == "true" || val == "1");
     else if (key == "right_enabled")    right_enabled    = (val == "true" || val == "1");
@@ -381,6 +394,7 @@ inline bool SaveConfig(const std::string& path)
     out << "hold_mode = "        << (hold_mode ? "true" : "false")       << "\n";
     out << "require_focus = "    << (require_focus ? "true" : "false")   << "\n";
     out << "legacy_timing = "    << (legacy_timing ? "true" : "false")   << "\n";
+    out << "spawn_gate = "       << (spawn_gate ? "true" : "false")      << "\n";
     out << "other_background = " << (other_background ? "true" : "false") << "\n";
     out << "left_enabled = "     << (left_enabled ? "true" : "false")    << "\n";
     out << "right_enabled = "    << (right_enabled ? "true" : "false")   << "\n";
@@ -433,7 +447,7 @@ static const char* const ABASER_CONFIG_KEYS[] = {
     "left_min_cps", "left_max_cps", "right_min_cps", "right_max_cps",
     "hit_chance", "right_chance",
     "blockhit", "blockhit_chance",
-    "hold_mode", "require_focus", "legacy_timing", "other_background",
+    "hold_mode", "require_focus", "legacy_timing", "spawn_gate", "other_background",
     "left_enabled", "right_enabled",
     "theme_primary", "theme_accent",
 };
@@ -471,6 +485,7 @@ inline std::string BuildConfigJson()
         else if (!strcmp(k, "hold_mode"))       snprintf(num, sizeof(num), "%s", hold_mode ? "true" : "false");
         else if (!strcmp(k, "require_focus"))   snprintf(num, sizeof(num), "%s", require_focus ? "true" : "false");
         else if (!strcmp(k, "legacy_timing"))   snprintf(num, sizeof(num), "%s", legacy_timing ? "true" : "false");
+        else if (!strcmp(k, "spawn_gate"))      snprintf(num, sizeof(num), "%s", spawn_gate ? "true" : "false");
         else if (!strcmp(k, "other_background")) snprintf(num, sizeof(num), "%s", other_background ? "true" : "false");
         else if (!strcmp(k, "left_enabled"))    snprintf(num, sizeof(num), "%s", left_enabled ? "true" : "false");
         else if (!strcmp(k, "right_enabled"))   snprintf(num, sizeof(num), "%s", right_enabled ? "true" : "false");
@@ -490,10 +505,13 @@ inline std::string BuildStatusJson(bool mc_found, float cps_l, float cps_r)
     char buf[256];
     snprintf(buf, sizeof(buf),
         "{\"status\":{\"left_on\":%s,\"right_on\":%s,\"cps_l\":%.1f,\"cps_r\":%.1f,"
-        "\"gui\":%s,\"bow\":%s,\"mc\":%s}}",
+        "\"gui\":%s,\"spawn\":%s,\"ally\":%s,\"bow\":%s,\"mc\":%s}}",
         left_enabled ? "true" : "false", right_enabled ? "true" : "false",
         (double)cps_l, (double)cps_r,
-        mod_gui_open ? "true" : "false", mod_holding_bow ? "true" : "false",
+        mod_gui_open ? "true" : "false",
+        mod_in_spawn ? "true" : "false",
+        mod_ally_crosshair ? "true" : "false",
+        mod_holding_bow ? "true" : "false",
         mc_found ? "true" : "false");
     return buf;
 }

@@ -44,6 +44,8 @@ struct AbaserUIHost
     bool  mod_linked;        // the game-side mod is feeding us state
     bool  mod_gui_open;      // any in-game GUI is open (inventory, chest, chat, ...)
     bool  mod_holding_bow;   // the player is holding a bow
+    bool  mod_in_spawn;      // the player stands inside the spawn box
+    bool  mod_ally_crosshair; // an ally / excepted player is under the crosshair
 
     // Live CPS readouts (engine-side rolling 1s window); 0.0 when idle.
     float live_cps_left;

@@ -203,11 +203,13 @@ int main(int argc, char** argv)
 
     // ------------------------------------------------------------------
     // CLICK GATES (ui_state.h): the single policy the engine and this sim
-    // share — an open GUI blocks everything, a drawn bow blocks right only.
+    // share — an open GUI blocks everything, spawn box + ally crosshair block
+    // everything (when the gate is on), a drawn bow blocks right only.
     // ------------------------------------------------------------------
     {
         hold_mode = true;
         mod_gui_open = false; mod_holding_bow = false;
+        mod_in_spawn = false; mod_ally_crosshair = false;
         Check(GateLeft(true, true) == true,  "gate: left fires in-game with key held");
         Check(GateRight(true, true) == true, "gate: right fires in-game with key held");
         mod_gui_open = true;
@@ -223,6 +225,21 @@ int main(int argc, char** argv)
         hold_mode = false;
         Check(GateLeft(true, false) == true,  "gate: non-hold mode clicks nonstop");
         hold_mode = true;
+        // spawn gate: the mod's spawn box holds every click while enabled
+        spawn_gate = true; mod_in_spawn = true;
+        Check(GateLeft(true, true) == false,  "gate: inside spawn blocks left (spawn_gate on)");
+        Check(GateRight(true, true) == false, "gate: inside spawn blocks right");
+        Check(GateBlockHit() == false,        "gate: inside spawn blocks block-hit taps");
+        spawn_gate = false;
+        Check(GateLeft(true, true) == true,   "gate: spawn gate off — spawn box alone does not block");
+        spawn_gate = true; mod_in_spawn = false;
+        // ally crosshair: team member / excepted player under the sights
+        mod_ally_crosshair = true;
+        Check(GateLeft(true, true) == false,  "gate: ally under crosshair blocks left");
+        Check(GateRight(true, true) == false, "gate: ally under crosshair blocks right");
+        Check(GateBlockHit() == false,        "gate: ally under crosshair blocks block-hit taps");
+        mod_ally_crosshair = false;
+        Check(GateLeft(true, true) == true,   "gate: ally flag clear — gates open again");
     }
 
     // ------------------------------------------------------------------
