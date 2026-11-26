@@ -40,6 +40,9 @@ import net.minecraftforge.fml.common.gameevent.TickEvent;
  *   1. install and start the exe (hidden in the system tray) when a
  *      server/world loads — release jars carry the exe INSIDE, so there is
  *      nothing to download or run by hand (see resolveExe/bundleExe);
+ *   1b. open the in-game panel when asked. NOTE: this must happen on a
+ *      LATER tick — 1.8.8's GuiChat closes whatever screen the command
+ *      opened the moment sendChatMessage returns (see panelOpenRequested);
  *   2. feed it live game state over stdin, one JSON line per change:
  *          {"gui":true,"bow":false,"held":"item.bow","spawn":false,"ally":false}
  *      "gui"   — ANY in-game screen is open (inventory, chest, villager,
@@ -69,6 +72,15 @@ public class ClientTickHandler {
     private static Process clicker;
     private static BufferedWriter toClicker;
 
+    /**
+     * Set by /abaser panel; the NEXT client tick opens the panel. The chat
+     * command path cannot call displayGuiScreen directly: 1.8.8's
+     * GuiChat.keyTyped runs {@code displayGuiScreen(null)} right after
+     * sendChatMessage() returns, which used to close the panel the very
+     * same frame — /abaser panel appeared to do nothing.
+     */
+    public static volatile boolean panelOpenRequested;
+
     /** The clicker exe shipped INSIDE this jar (release builds; dev jars omit it). */
     private static final String BUNDLED_EXE_RESOURCE = "/abaser/AbaserClicker.exe";
     /** Set when this launch actually installed or updated the managed copy. */
@@ -84,11 +96,45 @@ public class ClientTickHandler {
     private static boolean haveLast;
     private static int     ticksSinceSend;
 
+    /** The connected exe's build handshake watchdog state (outdated-exe replace). */
+    private static long    linkUpSinceMs;
+    private static boolean versionRelaunched;
+
     @SubscribeEvent
     public void onClientTick(TickEvent.ClientTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
         final Minecraft mc = Minecraft.getMinecraft();
         final boolean inWorld = mc.theWorld != null && mc.thePlayer != null;
+
+        // ---- 0a. a queued panel request (from /abaser panel) -----------------
+        // opened here, one tick after the chat command ran, when GuiChat can
+        // no longer null the screen underneath it
+        if (panelOpenRequested) {
+            panelOpenRequested = false;
+            mc.displayGuiScreen(new AbaserConfigGui());
+        }
+
+        // ---- 0b. outdated-exe watchdog ----------------------------------------
+        // The status line carries the exe's build ("ver"). A clicker that
+        // predates this mod build (or reports nothing at all) gets replaced
+        // once per session by resolveExe's bundled, version-matched copy.
+        if (clicker != null && LinkState.linkUp) {
+            if (linkUpSinceMs == 0L) linkUpSinceMs = System.currentTimeMillis();
+            final String ver = LinkState.version;
+            final boolean stale = ver == null || !ver.equals(Abaser.VERSION);
+            if (stale && !versionRelaunched
+                    && System.currentTimeMillis() - linkUpSinceMs > 6000L) {
+                versionRelaunched = true;
+                linkUpSinceMs = 0L;
+                chat(ver == null
+                        ? "Your clicker exe predates the version handshake - replacing it with the bundled " + Abaser.VERSION + " build..."
+                        : "Clicker " + ver + " is outdated - replacing it with the bundled " + Abaser.VERSION + " build...");
+                stopClicker();
+                tryLaunch(mc);
+            }
+        } else if (!LinkState.linkUp) {
+            linkUpSinceMs = 0L;
+        }
 
         // ---- 0. the panel keybind (Right Shift by default) --------------------
         if (inWorld && ClientProxy.panelKey != null && ClientProxy.panelKey.isPressed()
@@ -371,6 +417,8 @@ public class ClientTickHandler {
                 LinkState.holdingBow = flag(s, "bow");
                 LinkState.cpsLeft    = num(s, "cps_l");
                 LinkState.cpsRight   = num(s, "cps_r");
+                if (s.has("ver") && s.get("ver").isJsonPrimitive())
+                    LinkState.version = s.get("ver").getAsString();
             }
         } catch (Exception ignored) {
             // tolerate partial/garbage lines — never kill the reader

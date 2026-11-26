@@ -23,6 +23,10 @@ import net.minecraft.util.EnumChatFormatting;
  * configure it from the in-game panel, and closes it when the game closes.
  * The aim assist is the mod's own client-side camera nudge.
  *
+ * Commands still exist for keyboard-lovers, but EVERYTHING they do is also
+ * in the panel's tabs: Clicker (the exe), Aim (the assist), Friends
+ * (exceptions + lock-in + peace list) and Spawn (the box + gates).
+ *
  * Subcommands:
  *   /abaser panel                 open the in-game panel
  *   /abaser aim [on|off]          toggle/force the aim assist
@@ -101,8 +105,11 @@ public class CommandAbaser extends CommandBase {
         if (args.length > 0) {
             final String a = args[0].toLowerCase(Locale.ROOT);
             if (a.equals("panel") || a.equals("gui") || a.equals("open") || a.equals("config")) {
-                // client command — we are already on the client thread
-                Minecraft.getMinecraft().displayGuiScreen(new AbaserConfigGui());
+                // client command — but NOT displayGuiScreen directly: 1.8.8's
+                // GuiChat nulls the screen right after sendChatMessage
+                // returns, which used to close the panel the same frame.
+                // Queue it; the next client tick opens it for real.
+                ClientTickHandler.panelOpenRequested = true;
                 return;
             }
             if (a.equals("aim") || a.equals("aimassist")) {
@@ -143,24 +150,26 @@ public class CommandAbaser extends CommandBase {
                 + EnumChatFormatting.WHITE + "Abaser Clicker"
                 + EnumChatFormatting.GRAY + " exe - this mod starts it in your"
                 + " system tray when a world loads and closes it when the game closes.");
-        send(sender, EnumChatFormatting.GRAY + "Configure it from inside the game: press "
-                + EnumChatFormatting.WHITE + "Right Shift"
-                + EnumChatFormatting.GRAY + " (or run " + EnumChatFormatting.WHITE + "/abaser panel"
-                + EnumChatFormatting.GRAY + ") for the in-game panel.");
+        send(sender, EnumChatFormatting.GRAY + "Everything below is also in the panel's tabs"
+                + " (Clicker / Aim / Friends / Spawn):" + EnumChatFormatting.WHITE + " Right Shift"
+                + EnumChatFormatting.GRAY + " or " + EnumChatFormatting.WHITE + "/abaser panel"
+                + EnumChatFormatting.GRAY + ".");
         send(sender, EnumChatFormatting.GRAY + "The aim assist is built into this mod (client-side):"
                 + " press " + EnumChatFormatting.WHITE + "G" + EnumChatFormatting.GRAY
                 + " or run " + EnumChatFormatting.WHITE + "/abaser aim"
-                + EnumChatFormatting.GRAY + "; tune it in the panel's Aim Assist tab.");
-        send(sender, EnumChatFormatting.GRAY + "Exceptions: " + EnumChatFormatting.WHITE
-                + "/abaser except add NAME" + EnumChatFormatting.GRAY + " (manual), the"
-                + " peace list is parsed from the server's chat automatically,");
+                + EnumChatFormatting.GRAY + "; tune it in the panel's Aim tab.");
+        send(sender, EnumChatFormatting.GRAY + "Exceptions (never targeted): add them in the"
+                + EnumChatFormatting.WHITE + " Friends tab" + EnumChatFormatting.GRAY + " or with "
+                + EnumChatFormatting.WHITE + "/abaser except add NAME" + EnumChatFormatting.GRAY + ";"
+                + " the peace list is parsed from the server's chat automatically");
         send(sender, EnumChatFormatting.GRAY + "lock-in (only these targets): "
                 + EnumChatFormatting.WHITE + "/abaser lock on" + EnumChatFormatting.GRAY + " + "
-                + EnumChatFormatting.WHITE + "/abaser lock add NAME" + EnumChatFormatting.GRAY + ".");
+                + EnumChatFormatting.WHITE + "/abaser lock add NAME" + EnumChatFormatting.GRAY
+                + " - or the Friends tab.");
         send(sender, EnumChatFormatting.GRAY + "Spawn gates: "
                 + EnumChatFormatting.WHITE + "/abaser spawn here"
                 + EnumChatFormatting.GRAY + " (or /abaser spawn box X1 Y1 Z1 X2 Y2 Z2)"
-                + " - no clicks and no aim inside it.");
+                + " - or set the box in the Spawn tab. No clicks and no aim inside it.");
         send(sender, EnumChatFormatting.GRAY + "The exe clicks only inside Minecraft:"
                 + " nothing is clicked while any menu is open, while you hold a bow,"
                 + " inside the spawn box or with an ally under the crosshair.");

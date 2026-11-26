@@ -491,8 +491,9 @@ int main(int argc, char** argv)
         const std::string st = BuildStatusJson(true, 11.5f, 0.0f);
         Check(st.find("\"status\":{") == 1 && st.find("\"left_on\":true") != std::string::npos &&
               st.find("\"right_on\":false") != std::string::npos && st.find("\"cps_l\":11.5") != std::string::npos &&
-              st.find("\"mc\":true") != std::string::npos,
-              "status line reports armed side, live CPS and the game window");
+              st.find("\"mc\":true") != std::string::npos &&
+              st.find("\"ver\":\"") != std::string::npos,
+              "status line reports armed side, live CPS, the game window and the build");
 
         // ini round-trip survives a remote apply
         SaveConfig(SimConfigPath(nullptr));

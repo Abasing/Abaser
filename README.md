@@ -123,6 +123,16 @@ The mod link carries SETTINGS as well as state. Press **Right Shift**
 - a footer with the **live CPS** and the pause reason ("a menu is open",
   "bow drawn") — the same honesty the exe's own footer has.
 
+Three more tabs work without the exe link (they drive the mod's own
+config): **Aim** (every aim-assist knob), **Friends** (manual exceptions and
+lock-in names — text field + Add button, click the x to remove — plus the
+parsed peace list, read-only) and **Spawn** (the exact 3D box: editable
+corner fields, a radius slider with a "box around me" button, and both
+gates — no aim inside / no clicks inside). The chat commands still exist,
+but everything they do lives in these tabs now. The header shows the
+connected clicker's build string, and the mod replaces an outdated exe
+with the bundled version-matched build automatically.
+
 Every change leaves the mod as one `{"config":{...}}` line on the exe's
 stdin using the exact `abaser.ini` key names; the exe applies it through
 the same code path as its own sliders (same clamps), **persists it to
@@ -162,23 +172,25 @@ assist was removed — targeting is players-only.)
 | **Silent aim** | Apply the same turn through the mouse's own entry point (`setAngles`) instead of writing the rotation fields. The mode converts the wanted degrees into `setAngles` input space — 1.8.8's `setAngles` multiplies the input by its own `0.15` mouse scaling and flips the pitch sign, so feeding it raw degrees turned yaw at ~1/7 strength and pitched the WRONG way (fixed: `setAngles(stepYaw / 0.15F, -stepPitch / 0.15F)`) |
 | **Require click** | Only assist while the attack key is held |
 | **Peace/team exceptions** | The mod parses the server's `You have peace with N player(s)` chat block (`- Name` lines follow) and never targets those players — live in memory, refreshed each time the server re-announces |
-| **Manual exceptions** | `/abaser except add|remove NAME` — players the assist (and the clicks) always skip; persisted |
-| **Lock-in mode** | `/abaser lock on` + `lock add NAME` — ONLY those names are targeted, no one else; persisted, toggled in the panel too |
+| **Manual exceptions** | the panel's **Friends tab** (or `/abaser except add|remove NAME`) — players the assist (and the clicks) always skip; persisted |
+| **Lock-in mode** | the **Friends tab** (or `/abaser lock on` + `lock add NAME`) — ONLY those names are targeted; persisted, toggled in the tab too |
 | **Spawn gates** | An exact 3D box (two corners): **no aim assist** inside it (Aim tab) and **no clicks** inside it (`spawn_gate`, Clicker tab) — both on by default |
 
 Controls and storage:
 
 - **G** toggles it (rebindable in Controls, `key.abaser.aimassist`);
   `/abaser aim` (or `aim on` / `aim off`) does the same from chat;
-- the panel's **Aim Assist tab** (Right Shift) exposes every knob with the
+- the panel's **Aim tab** (Right Shift) exposes every knob with the
   same glass sliders and toggles as the Clicker tab — plus a live
   `target: <name>` readout and a `peace N manual N lock N` counter line;
 - the default spawn box is the measured SKYPVP spawn
   (`-23.52 57.00 23.67` to `23.65 58.00 -22.35`, exact 3D test); move it
   with `/abaser spawn here [halfwidth]` (re-centers around you),
   `/abaser spawn box X1 Y1 Z1 X2 Y2 Z2` (exact corners) or
-  `/abaser spawn show`;
-- `/abaser peace` dumps the currently parsed peace list;
+  `/abaser spawn show` — or just edit the box in the panel's **Spawn tab**
+  (corner fields, radius slider, "Box around me");
+- `/abaser peace` dumps the currently parsed peace list (the **Friends tab**
+  shows it live);
 - aim settings persist in the game's `config/abaser_aim.json` — mod-owned,
   clamped on load and on every edit, and never sent over the mod link
   (the exe has nothing to do with them); exception and lock-in lists ride

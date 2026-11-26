@@ -31,6 +31,12 @@ final class LinkState {
     static volatile float   cpsLeft   = 0.0f;
     static volatile float   cpsRight  = 0.0f;
 
+    /** The clicker exe's own build string (from the status line's "ver").
+     *  Null while the exe predates the version handshake — i.e. an
+     *  outdated exe. The panel shows it; ClientTickHandler's watchdog
+     *  replaces outdated exes with the bundled build. */
+    static volatile String  version   = null;
+
     /** Any stdout line has been seen since the exe started. */
     static volatile boolean linkUp = false;
 
@@ -47,5 +53,6 @@ final class LinkState {
         linkUp = false;
         leftOn = rightOn = mcFound = guiOpen = holdingBow = false;
         cpsLeft = cpsRight = 0.0f;
+        version = null;
     }
 }

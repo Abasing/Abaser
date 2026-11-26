@@ -1,17 +1,21 @@
 package net.zaminmc.abaser;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.opengl.GL11;
 
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiScreen;
+import net.minecraft.client.gui.GuiTextField;
 import net.minecraft.client.renderer.GlStateManager;
 
 /**
- * The in-game Abaser panel — a small glass-styled settings screen with two
+ * The in-game Abaser panel — a small glass-styled settings screen with four
  * tabs, reached with Right Shift (or /abaser panel).
  *
  * TAB 1 — CLICKER: talks to the standalone Abaser Clicker exe over the mod
@@ -22,10 +26,19 @@ import net.minecraft.client.renderer.GlStateManager;
  * the exe keeps doing all of the clicking with its own engine, its own
  * hotkeys and its own PostMessage targeting.
  *
- * TAB 2 — AIM ASSIST: the one engine that lives inside the mod (a
- * client-side camera nudge — see AimAssist). These knobs edit the mod's own
- * config (config/abaser_aim.json) directly; they never travel the link
- * because the exe has nothing to do with them.
+ * TAB 2 — AIM: the one engine that lives inside the mod (a client-side
+ * camera nudge — see AimAssist). These knobs edit the mod's own config
+ * (config/abaser_aim.json) directly; they never travel the link because the
+ * exe has nothing to do with them.
+ *
+ * TAB 3 — FRIENDS: who the assist must never target and, in lock-in mode,
+ * who it must target. Manual exceptions and lock names are edited right
+ * here (text field + Add button, click the x to remove); the peace list is
+ * shown read-only — it fills automatically from the server's chat.
+ *
+ * TAB 4 — SPAWN: the exact 3D spawn box (editable fields, an "around me"
+ * button, radius) plus both gates — no aim inside (mod) and no clicks
+ * inside (the exe's spawn_gate).
  *
  * While this screen is open the mod reports gui=true (it is a GUI like any
  * other), so the exe holds every click while you configure it — and the aim
@@ -66,8 +79,11 @@ public class AbaserConfigGui extends GuiScreen {
     };
 
     // ---- tabs ----------------------------------------------------------------
-    private static final String[] TABS = { "Clicker", "Aim Assist" };
-    private int tab = 0;                    // 0 = clicker (exe link), 1 = aim assist (mod)
+    private static final String[] TABS = { "Clicker", "Aim", "Friends", "Spawn" };
+    // 0 = clicker (exe link), 1 = aim assist (mod), 2 = friends, 3 = spawn
+    private int tab = 0;
+    /** Remembers the open tab across re-opens in one session. */
+    private static int lastTab = 0;
 
     // ---- slider specs -------------------------------------------------------
     private static class Slider {
@@ -129,9 +145,48 @@ public class AbaserConfigGui extends GuiScreen {
     public void initGui() {
         px = (this.width - PW) / 2;
         py = Math.max(4, (this.height - PH) / 2);
+        tab = lastTab;
+        initNameFields();
         pullFromExe(true);
         // ask again in case the handshake echo has not landed yet
         if (linked && !haveCfg) ClientTickHandler.sendConfigLine("{\"get\":\"config\"}");
+    }
+
+    // ---- text fields (Friends + Spawn tabs) ----------------------------------
+    // Geometry is fixed per tab layout; fields are built once in initGui with
+    // their final on-screen positions (GuiTextField has no move setters).
+    private GuiTextField exAdd, lockAdd;                    // name entry rows
+    private final GuiTextField[] spawnField = new GuiTextField[6];   // X1 Y1 Z1 X2 Y2 Z2
+    private float spawnRadius = 24.0F;                      // "box around me" radius
+    private String spawnErr = null;                         // last parse error, if any
+    private boolean radiusDrag = false;
+
+    // friends-tab card geometry (shared by draw + hit tests)
+    private int exCardX()   { return px + 8; }
+    private int exCardY()   { return py + 38; }
+    private int lockCardY() { return py + 118; }
+    private int friendCardH() { return 76; }
+
+    private void initNameFields() {
+        final int ax = exCardX();
+        exAdd  = makeField(1, ax + 8, exCardY() + 58, 168);
+        lockAdd = makeField(2, ax + 8, lockCardY() + 58, 168);
+        final float[] cur = {
+            AimAssist.cfg.spawnX1, AimAssist.cfg.spawnY1, AimAssist.cfg.spawnZ1,
+            AimAssist.cfg.spawnX2, AimAssist.cfg.spawnY2, AimAssist.cfg.spawnZ2
+        };
+        final int[] fy = { py + 58, py + 74, py + 90 };     // X, Y, Z rows
+        final int[] fx = { px + 20, px + 124 };             // min / max columns
+        for (int i = 0; i < 6; i++) {
+            spawnField[i] = makeField(3 + i, fx[i % 2], fy[i / 2], i % 2 == 0 ? 88 : 92);
+            spawnField[i].setText(fmt(cur[i]));
+        }
+    }
+
+    private GuiTextField makeField(int id, int x, int y, int w) {
+        final GuiTextField f = new GuiTextField(id, this.fontRendererObj, x, y, w, 13);
+        f.setMaxStringLength(id >= 3 ? 12 : 16);
+        return f;
     }
 
     /** Copy the exe's last canonical config into the working copy. */
@@ -297,6 +352,14 @@ public class AbaserConfigGui extends GuiScreen {
             drawAimTab(mouseX, mouseY);
             return;
         }
+        if (tab == 2) {                       // friends — mod-side, link not needed
+            drawFriendsTab(mouseX, mouseY);
+            return;
+        }
+        if (tab == 3) {                       // spawn — box mod-side, gates split
+            drawSpawnTab(mouseX, mouseY);
+            return;
+        }
         if (!linked) {
             drawNotRunning(mouseX, mouseY);
             return;
@@ -319,17 +382,23 @@ public class AbaserConfigGui extends GuiScreen {
     }
 
     private void drawNotRunning(int mouseX, int mouseY) {
-        drawCentered("Abaser Clicker is not running", py + 102, C_TEXT);
-        drawCentered("Join a world - the mod starts it in your tray.", py + 116, C_MUT);
-        drawCentered("The Aim Assist tab works without it.", py + 130, C_DIM);
+        drawCentered("Abaser Clicker is not running", py + 96, C_TEXT);
+        drawCentered("Join a world - the mod installs and starts it", py + 110, C_MUT);
+        drawCentered("in your system tray (bundled with this jar).", py + 122, C_MUT);
+        drawCentered("The Aim, Friends and Spawn tabs work without it.", py + 138, C_DIM);
         doneButton(mouseX, mouseY);
     }
 
     private void drawHeader() {
         this.fontRendererObj.drawStringWithShadow("Abaser Clicker", px + 10, py + 7, C_TEXT);
+        // the exe's own build string, once the handshake has reported it
+        if (tab == 0 && linked && LinkState.version != null) {
+            this.fontRendererObj.drawStringWithShadow(LinkState.version,
+                    px + 10 + this.fontRendererObj.getStringWidth("Abaser Clicker") + 6, py + 7, C_DIM);
+        }
         // live status dot + word, right-aligned
         String st; int dot;
-        if (tab == 1) {
+        if (tab >= 1) {
             st  = AimAssist.cfg.enabled ? "assist on" : "assist off";
             dot = AimAssist.cfg.enabled ? C_OK : 0x50FFFFFF;
         } else if (LinkState.guiOpen)       { st = "menu open"; dot = C_WARN; }
@@ -693,6 +762,240 @@ public class AbaserConfigGui extends GuiScreen {
         doneButton(mx, my);
     }
 
+    // ---- FRIENDS tab (exceptions + lock-in + peace list) ----------------------
+    // The mod's own lists, edited right here instead of via chat commands.
+    // Never touches the exe link — targeting decisions are made by the mod's
+    // aim assist; the exe only ever receives the resulting ally=true/false.
+
+    private final Map<Integer, int[]> exRemoveHit   = new HashMap<Integer, int[]>();
+    private final Map<Integer, int[]> lockRemoveHit = new HashMap<Integer, int[]>();
+    private int[] exClearHit = null;
+    private int[] lockSwitchHit = null;
+    private int[] exAddHit = null;
+    private int[] lockAddHit = null;
+
+    private void drawFriendsTab(int mx, int my) {
+        drawFriendCard(exCardY(), "Exceptions", AimAssist.cfg.manualExceptions, false, mx, my);
+        drawFriendCard(lockCardY(), "Lock-in", AimAssist.cfg.lockNames, true, mx, my);
+
+        // peace list (read-only — the server's chat fills it automatically)
+        final Set<String> peace = PeaceList.snapshot();
+        String ptxt;
+        if (peace.isEmpty()) {
+            ptxt = "peace list is empty - it fills when the server prints its /peace list";
+        } else {
+            final StringBuilder sb = new StringBuilder(192);
+            for (String s : peace) { if (sb.length() > 0) sb.append(", "); sb.append(s); }
+            ptxt = "peace list (" + peace.size() + "): " + sb;
+        }
+        this.fontRendererObj.drawStringWithShadow(
+                this.fontRendererObj.trimStringToWidth(ptxt, PW - 28), px + 14, py + 204, C_MUT);
+        this.fontRendererObj.drawStringWithShadow(
+                "parsed from the server's chat automatically - read-only", px + 14, py + 216, C_DIM);
+        doneButton(mx, my);
+    }
+
+    /** One list card: header (title + clear|lock switch), 2x3 name rows with
+     *  x-buttons, and the add field + button. */
+    private void drawFriendCard(int y, String title, List<String> names,
+                                boolean lockCard, int mx, int my) {
+        final int x = exCardX(), w = 228, h = friendCardH();
+        glassRect(x, y, w, h, C_CARD, C_CARD_EDGE);
+        this.fontRendererObj.drawStringWithShadow(
+                title + " (" + names.size() + ")", x + 8, y + 4, C_DIM);
+
+        if (lockCard) {
+            final int swx = x + w - 8 - 22, swy = y + 2;
+            drawSwitch(swx, swy, AimAssist.cfg.lockEnabled, inRect(mx, my, swx, swy, 22, 11));
+            lockSwitchHit = new int[] { swx, swy };
+        } else if (!names.isEmpty()) {
+            final int cbx = x + w - 8 - 34, cby = y + 2;
+            final boolean hov = inRect(mx, my, cbx, cby, 34, 12);
+            glassRect(cbx, cby, 34, 12, hov ? 0x30FFFFFF : 0x14FFFFFF, 0x2EFFFFFF);
+            this.fontRendererObj.drawStringWithShadow("clear", cbx + 8, cby + 2,
+                    hov ? C_TEXT : C_MUT);
+            exClearHit = new int[] { cbx, cby };
+        } else {
+            exClearHit = null;
+        }
+
+        final Map<Integer, int[]> removeHit = lockCard ? lockRemoveHit : exRemoveHit;
+        removeHit.clear();
+        final int n = names.size();
+        final int shown = n > 6 ? 5 : n;                 // keep slot 6 for "+N more"
+        for (int i = 0; i < shown; i++) {
+            final int col = i / 3, row = i % 3;
+            final int nx = x + 8 + col * 112, ny = y + 17 + row * 13;
+            this.fontRendererObj.drawStringWithShadow(
+                    this.fontRendererObj.trimStringToWidth(names.get(i), 80), nx, ny, C_TEXT);
+            final int bx = nx + 86, by = ny - 2;
+            final boolean hov = inRect(mx, my, bx, by, 10, 10);
+            glassRect(bx, by, 10, 10, hov ? 0x34FFFFFF : 0x14FFFFFF, 0x2EFFFFFF);
+            this.fontRendererObj.drawStringWithShadow("x", bx + 3, by + 1, hov ? C_BAD : C_MUT);
+            removeHit.put(i, new int[] { bx, by });
+        }
+        if (n > 6) {
+            this.fontRendererObj.drawStringWithShadow("+" + (n - 5) + " more",
+                    x + 8 + 112, y + 17 + 2 * 13, C_DIM);
+        } else if (n == 0) {
+            this.fontRendererObj.drawStringWithShadow(
+                    lockCard
+                        ? (AimAssist.cfg.lockEnabled ? "ON but empty - add the only targets"
+                                                     : "when on, ONLY these names are targeted")
+                        : "names here are never targeted",
+                    x + 8, y + 17, C_DIM);
+        }
+
+        // the add row (field built in initGui with its final position)
+        final GuiTextField f = lockCard ? lockAdd : exAdd;
+        if (f != null) f.drawTextBox();
+        final int bax = x + w - 48, bay = y + 58;
+        final boolean bhov = inRect(mx, my, bax, bay, 40, 13);
+        glassRect(bax, bay, 40, 13, bhov ? 0x30FFFFFF : C_DONE_BG, 0x2EFFFFFF);
+        this.fontRendererObj.drawStringWithShadow("Add", bax + 13, bay + 3, C_TEXT);
+        if (lockCard) lockAddHit = new int[] { bax, bay }; else exAddHit = new int[] { bax, bay };
+    }
+
+    private void addFromField(GuiTextField f, boolean exception) {
+        if (f == null) return;
+        final String s = f.getText().trim();
+        if (s.length() == 0) return;
+        if (exception) AimAssist.cfg.addException(s); else AimAssist.cfg.addLock(s);
+        f.setText("");
+    }
+
+    // ---- SPAWN tab (the exact 3D box + both gates) ----------------------------
+
+    private int spawnCardX()  { return px + 8; }
+    private int spawnCardY()  { return py + 38; }
+    private int spawnGatesY() { return py + 144; }
+    private int[] aroundHit = null, applyHit = null, spawnAimHit = null, spawnClickHit = null;
+
+    private void drawSpawnTab(int mx, int my) {
+        final int x = spawnCardX(), y = spawnCardY(), w = 228, h = 100;
+        glassRect(x, y, w, h, C_CARD, C_CARD_EDGE);
+        final boolean inside = AimAssist.inSpawn;
+        this.fontRendererObj.drawStringWithShadow("Spawn box - exact 3D corners", x + 8, y + 4, C_DIM);
+        final String you = inside ? "you are INSIDE" : "you are outside";
+        final int yw = this.fontRendererObj.getStringWidth(you);
+        this.fontRendererObj.drawStringWithShadow(you, x + w - 8 - yw, y + 4, inside ? C_WARN : C_DIM);
+
+        // coordinate rows (fields built in initGui with their final positions)
+        final String[] axis = { "X", "Y", "Z" };
+        for (int r = 0; r < 3; r++) {
+            final int ry = y + 20 + r * 16;
+            this.fontRendererObj.drawStringWithShadow(axis[r], x + 8, ry + 3, C_MUT);
+            this.fontRendererObj.drawStringWithShadow("..", x + 110, ry + 3, C_DIM);
+            if (spawnField[r * 2]     != null) spawnField[r * 2].drawTextBox();
+            if (spawnField[r * 2 + 1] != null) spawnField[r * 2 + 1].drawTextBox();
+        }
+
+        // radius slider — feeds "Box around me"
+        final int ry2 = y + 72;
+        this.fontRendererObj.drawStringWithShadow("Radius", x + 8, ry2, C_MUT);
+        this.fontRendererObj.drawStringWithShadow(
+                String.format(Locale.ROOT, "%.0f", spawnRadius), x + 196, ry2, C_TEXT);
+        final int tx = x + 56, tw = 132, ty = ry2 + 10, th = 6;
+        drawRect(tx, ty, tx + tw, ty + th, C_TRACK);
+        final float frac = Math.max(0.0f, Math.min(1.0f, (spawnRadius - 2.0f) / 46.0f));
+        final int pad = 3;
+        final int fillw = (int)(pad + frac * (tw - 2 * pad));
+        if (fillw > 1) drawRect(tx, ty, tx + fillw, ty + th, (accent & 0xFFFFFF) | 0xE6000000);
+        final float kx = tx + pad + frac * (tw - 2 * pad);
+        circle(kx, ty + th / 2.0f, 4.0f, 0xFFF2F3F7);
+        circle(kx, ty + th / 2.0f, 4.0f - 0.75f, (accent & 0xFFFFFF) | 0x66FFFFFF);
+        circle(kx, ty + th / 2.0f, 4.0f - 1.5f, 0xFFF2F3F7);
+
+        // buttons
+        final int by = y + 84;
+        final boolean ahov = inRect(mx, my, x + 8, by, 104, 13);
+        glassRect(x + 8, by, 104, 13, ahov ? 0x30FFFFFF : C_DONE_BG, 0x2EFFFFFF);
+        this.fontRendererObj.drawStringWithShadow("Box around me", x + 26, by + 3, C_TEXT);
+        aroundHit = new int[] { x + 8, by };
+        final boolean phov = inRect(mx, my, x + 120, by, 100, 13);
+        glassRect(x + 120, by, 100, 13, phov ? 0x30FFFFFF : C_DONE_BG, 0x2EFFFFFF);
+        this.fontRendererObj.drawStringWithShadow("Apply fields", x + 148, by + 3, C_TEXT);
+        applyHit = new int[] { x + 120, by };
+
+        // the two gates
+        final int gy = spawnGatesY();
+        glassRect(x, gy, w, 44, C_CARD, C_CARD_EDGE);
+        this.fontRendererObj.drawStringWithShadow("Gates", x + 8, gy + 4, C_DIM);
+        // aim gate — mod-owned, always editable
+        this.fontRendererObj.drawStringWithShadow("No aim inside spawn", x + 8, gy + 17, C_TEXT);
+        final int s1x = x + w - 8 - 22;
+        drawSwitch(s1x, gy + 16, AimAssist.cfg.spawnBlockAim,
+                inRect(mx, my, s1x, gy + 16, 22, 11));
+        spawnAimHit = new int[] { s1x, gy + 16 };
+        // click gate — exe-owned (spawn_gate), editable only with the link up
+        final boolean gate = getB("spawn_gate", true);
+        this.fontRendererObj.drawStringWithShadow("No clicks inside spawn", x + 8, gy + 33,
+                linked ? C_TEXT : C_DIM);
+        final int s2x = x + w - 8 - 22;
+        drawSwitch(s2x, gy + 32, gate, linked && inRect(mx, my, s2x, gy + 32, 22, 11));
+        spawnClickHit = new int[] { s2x, gy + 32 };
+        if (!linked) this.fontRendererObj.drawStringWithShadow("(needs the clicker)",
+                x + 120, gy + 33, C_DIM);
+
+        // error / status line
+        final String line = spawnErr != null ? spawnErr
+                : inside ? "inside the box - aim freezes and clicks hold"
+                         : "outside the box - nothing is held";
+        this.fontRendererObj.drawStringWithShadow(line, px + 14, py + 200,
+                spawnErr != null ? C_BAD : (inside ? C_WARN : C_DIM));
+        doneButton(mx, my);
+    }
+
+    private void applySpawnFields() {
+        try {
+            final AimAssistConfig c = AimAssist.cfg;
+            c.spawnX1 = Float.parseFloat(spawnField[0].getText().trim());
+            c.spawnY1 = Float.parseFloat(spawnField[1].getText().trim());
+            c.spawnZ1 = Float.parseFloat(spawnField[2].getText().trim());
+            c.spawnX2 = Float.parseFloat(spawnField[3].getText().trim());
+            c.spawnY2 = Float.parseFloat(spawnField[4].getText().trim());
+            c.spawnZ2 = Float.parseFloat(spawnField[5].getText().trim());
+            c.save();
+            spawnErr = null;
+        } catch (NumberFormatException e) {
+            spawnErr = "bad number - use plain decimals, e.g. 57.00";
+        }
+    }
+
+    private void spawnAroundMe() {
+        final Minecraft mc0 = Minecraft.getMinecraft();
+        if (mc0.thePlayer == null) { spawnErr = "join a world first"; return; }
+        final double x0 = mc0.thePlayer.posX, y0 = mc0.thePlayer.posY, z0 = mc0.thePlayer.posZ;
+        final float r = Math.max(2.0F, spawnRadius);
+        final AimAssistConfig c = AimAssist.cfg;
+        c.spawnX1 = (float) (x0 - r);  c.spawnY1 = (float) y0;       c.spawnZ1 = (float) (z0 - r);
+        c.spawnX2 = (float) (x0 + r);  c.spawnY2 = (float) (y0 + 2); c.spawnZ2 = (float) (z0 + r);
+        c.save();
+        final float[] cur = {
+            c.spawnX1, c.spawnY1, c.spawnZ1, c.spawnX2, c.spawnY2, c.spawnZ2
+        };
+        for (int i = 0; i < 6; i++) if (spawnField[i] != null) spawnField[i].setText(fmt(cur[i]));
+        spawnErr = null;
+    }
+
+    /** Radius track geometry (draw + click + drag). */
+    private boolean radiusHit(int mx, int my) {
+        final int tx = spawnCardX() + 56, ty = spawnCardY() + 72 + 10;
+        return my >= ty - 2 && my <= ty + 10 && mx >= tx - 2 && mx <= tx + 132 + 2;
+    }
+
+    private void radiusApply(int mx) {
+        final int tx = spawnCardX() + 56;
+        final float frac = Math.max(0.0f, Math.min(1.0f, (mx - tx) / 132.0f));
+        spawnRadius = Math.round(2.0f + frac * 46.0f);
+    }
+
+    private void blurFields() {
+        if (exAdd != null) exAdd.setFocused(false);
+        if (lockAdd != null) lockAdd.setFocused(false);
+        for (GuiTextField f : spawnField) if (f != null) f.setFocused(false);
+    }
+
     // ---- input --------------------------------------------------------------
     @Override
     protected void mouseClicked(int mx, int my, int btn) {
@@ -704,13 +1007,77 @@ public class AbaserConfigGui extends GuiScreen {
             if (inRect(mx, my, r[0], r[1], r[2], 13)) {
                 if (tab != e.getKey()) {
                     tab = e.getKey();
+                    lastTab = tab;
                     dragKey = aimDrag = null;   // never carry a drag across tabs
+                    radiusDrag = false; spawnErr = null;
+                    blurFields();
                 }
                 return;
             }
         }
         // Done — always available
         if (inRect(mx, my, doneRect(), py + PH - 24, 44, 14)) { close(); return; }
+
+        // friends tab: edit the mod's own lists
+        if (tab == 2) {
+            if (exAdd != null && exAdd.mouseClicked(mx, my, btn)) return;
+            if (lockAdd != null && lockAdd.mouseClicked(mx, my, btn)) return;
+            final List<String> exL = AimAssist.cfg.manualExceptions;
+            for (Map.Entry<Integer, int[]> e : exRemoveHit.entrySet()) {
+                final int[] r = e.getValue();
+                if (inRect(mx, my, r[0], r[1], 10, 10)) {
+                    if (e.getKey() < exL.size()) AimAssist.cfg.removeException(exL.get(e.getKey()));
+                    return;
+                }
+            }
+            final List<String> lkL = AimAssist.cfg.lockNames;
+            for (Map.Entry<Integer, int[]> e : lockRemoveHit.entrySet()) {
+                final int[] r = e.getValue();
+                if (inRect(mx, my, r[0], r[1], 10, 10)) {
+                    if (e.getKey() < lkL.size()) AimAssist.cfg.removeLock(lkL.get(e.getKey()));
+                    return;
+                }
+            }
+            if (exClearHit != null && inRect(mx, my, exClearHit[0], exClearHit[1], 34, 12)) {
+                AimAssist.cfg.clearExceptions();
+                return;
+            }
+            if (lockSwitchHit != null && inRect(mx, my, lockSwitchHit[0], lockSwitchHit[1], 22, 11)) {
+                AimAssist.cfg.lockEnabled = !AimAssist.cfg.lockEnabled;
+                AimAssist.cfg.save();
+                return;
+            }
+            if (exAddHit != null && inRect(mx, my, exAddHit[0], exAddHit[1], 40, 13)) {
+                addFromField(exAdd, true); return;
+            }
+            if (lockAddHit != null && inRect(mx, my, lockAddHit[0], lockAddHit[1], 40, 13)) {
+                addFromField(lockAdd, false); return;
+            }
+            return;
+        }
+
+        // spawn tab: mod-side box + gates (click gate needs the link)
+        if (tab == 3) {
+            for (GuiTextField f : spawnField)
+                if (f != null && f.mouseClicked(mx, my, btn)) return;
+            if (radiusHit(mx, my)) { radiusDrag = true; radiusApply(mx); return; }
+            if (aroundHit != null && inRect(mx, my, aroundHit[0], aroundHit[1], 104, 13)) {
+                spawnAroundMe(); return;
+            }
+            if (applyHit != null && inRect(mx, my, applyHit[0], applyHit[1], 100, 13)) {
+                applySpawnFields(); return;
+            }
+            if (spawnAimHit != null && inRect(mx, my, spawnAimHit[0], spawnAimHit[1], 22, 11)) {
+                AimAssist.cfg.spawnBlockAim = !AimAssist.cfg.spawnBlockAim;
+                AimAssist.cfg.save();
+                return;
+            }
+            if (spawnClickHit != null && inRect(mx, my, spawnClickHit[0], spawnClickHit[1], 22, 11)) {
+                if (linked && haveCfg) toggle("spawn_gate", true);
+                return;
+            }
+            return;
+        }
 
         // aim tab: edit the mod's own config
         if (tab == 1) {
@@ -805,6 +1172,7 @@ public class AbaserConfigGui extends GuiScreen {
     @Override
     protected void mouseClickMove(int mx, int my, int btn, long timeSinceLast) {
         if (btn != 0) return;
+        if (radiusDrag) { radiusApply(mx); return; }
         if (aimDrag != null) {
             for (int a = 0; a < 2; a++) {
                 final AimSlider[] arr = a == 0 ? AIM_LEFT : AIM_RIGHT;
@@ -838,6 +1206,7 @@ public class AbaserConfigGui extends GuiScreen {
 
     @Override
     protected void mouseReleased(int mx, int my, int state) {
+        radiusDrag = false;
         if (aimDrag != null) {
             aimDrag = null;
             AimAssist.cfg.clamp();
@@ -847,12 +1216,33 @@ public class AbaserConfigGui extends GuiScreen {
     }
 
     @Override
-    protected void keyTyped(char typedChar, int keyCode) {
-        if (keyCode == Keyboard.KEY_ESCAPE) { close(); return; }
-        if (ClientProxy.panelKey != null && keyCode == ClientProxy.panelKey.getKeyCode()) close();
+    public void updateScreen() {
+        if (exAdd != null) exAdd.updateCursorCounter();
+        if (lockAdd != null) lockAdd.updateCursorCounter();
+        for (GuiTextField f : spawnField) if (f != null) f.updateCursorCounter();
     }
 
+    @Override
+    protected void keyTyped(char typedChar, int keyCode) {
+        // text fields first — they must see every key while focused
+        if (exAdd != null) exAdd.textboxKeyTyped(typedChar, keyCode);
+        if (lockAdd != null) lockAdd.textboxKeyTyped(typedChar, keyCode);
+        for (GuiTextField f : spawnField) if (f != null) f.textboxKeyTyped(typedChar, keyCode);
+        // Enter in a name field = Add
+        if (keyCode == Keyboard.KEY_RETURN) {
+            if (exAdd != null && exAdd.isFocused()) { addFromField(exAdd, true); return; }
+            if (lockAdd != null && lockAdd.isFocused()) { addFromField(lockAdd, false); return; }
+        }
+        if (keyCode == Keyboard.KEY_ESCAPE) { rememberTab(); close(); return; }
+        if (ClientProxy.panelKey != null && keyCode == ClientProxy.panelKey.getKeyCode()) {
+            rememberTab(); close();
+        }
+    }
+
+    private void rememberTab() { lastTab = tab; }
+
     private void close() {
+        rememberTab();
         this.mc.displayGuiScreen(null);
     }
 }

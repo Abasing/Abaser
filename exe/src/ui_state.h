@@ -23,6 +23,13 @@
 #include <mutex>
 #include <atomic>
 
+// Build string baked in by the build system (CMake -DABASER_VERSION="x.y").
+// ui_state.h is shared with the simulator, which builds without CMake, so a
+// fallback keeps every translation unit self-sufficient.
+#ifndef ABASER_VERSION
+#define ABASER_VERSION "dev"
+#endif
+
 // ---------------------------------------------------------------------------
 // String obfuscation ("the key is in the source code")
 // ---------------------------------------------------------------------------
@@ -550,20 +557,23 @@ inline std::string BuildConfigJson()
     return o;
 }
 
-// Live-state line, streamed every 2 s while the link is up.
+// Live-state line, streamed every 2 s while the link is up. "ver" is the
+// exe's own build string: the mod's watchdog uses it to detect an outdated
+// clicker and replace it with the version-matched copy bundled in the jar.
 inline std::string BuildStatusJson(bool mc_found, float cps_l, float cps_r)
 {
     char buf[256];
     std::lock_guard<std::recursive_mutex> lk(g_state_mutex);
     snprintf(buf, sizeof(buf),
         "{\"status\":{\"left_on\":%s,\"right_on\":%s,\"cps_l\":%.1f,\"cps_r\":%.1f,"
-        "\"gui\":%s,\"spawn\":%s,\"ally\":%s,\"bow\":%s,\"mc\":%s}}",
+        "\"gui\":%s,\"spawn\":%s,\"ally\":%s,\"bow\":%s,\"mc\":%s,\"ver\":\"%s\"}}",
         left_enabled ? "true" : "false", right_enabled ? "true" : "false",
         (double)cps_l, (double)cps_r,
         mod_gui_open ? "true" : "false",
         mod_in_spawn ? "true" : "false",
         mod_ally_crosshair ? "true" : "false",
         mod_holding_bow ? "true" : "false",
-        mc_found ? "true" : "false");
+        mc_found ? "true" : "false",
+        ABASER_VERSION);
     return buf;
 }
