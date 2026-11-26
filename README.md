@@ -1,13 +1,13 @@
 # Abaser
 
 **Abaser** — a Minecraft auto-clicker in the classic style: a **standalone
-Windows executable** that lives next to your game. The repo builds two things
-and releases them together, automatically, on every push to `develop`:
+Windows executable** kept strictly outside the game. The repo builds two
+things and releases them together, automatically, on every push to `develop`:
 
 | Deliverable | What it is |
 |---|---|
 | **`Abaser-Clicker-<version>-win64.exe`** | The auto-clicker. Win32 + Dear ImGui + DirectX 9, one file, no runtimes, no install. |
-| `Abaser-1.8.8-<version>.jar` | Companion mod — loads with Forge, starts the exe with your server, feeds it live game state (GUIs, bow, spawn box, ally under crosshair), closes it with the game, and carries the **aim assist** (client-side camera steering, players only, with peace-list / manual / lock-in exceptions). **It does not click.** |
+| `Abaser-1.8.8-<version>.jar` | Companion mod — **carries the exe inside**: drop it in `mods/` and the mod unpacks, starts and manages the clicker by itself (zero manual setup). Feeds it live game state (GUIs, bow, spawn box, ally under crosshair), closes it with the game, and carries the **aim assist** (client-side camera steering, players only, with peace-list / manual / lock-in exceptions). **It does not click.** |
 
 ## Abaser Clicker (the exe)
 
@@ -78,9 +78,15 @@ Improvements over the classic external clicker it descends from:
 An external program can never see inside the game process on its own. The
 companion mod closes that gap with a stdin link:
 
-- when a **server/world loads**, the mod starts
-  `AbaserClicker.exe --managed /tray` — it appears directly in the system
-  tray (game folder or `mods/` folder, or `$ABASER_EXE`);
+- when a **server/world loads**, the mod installs and starts
+  `AbaserClicker.exe --managed /tray` — release jars carry the exe inside,
+  so the mod unpacks it to `.minecraft/Abaser/` on first use (SHA-1-checked:
+  a newer jar replaces an older exe automatically, `abaser.ini` survives in
+  the same folder) and it appears directly in the system tray; a manually
+  installed copy (game folder, `mods/` folder, or `$ABASER_EXE`) still works
+  and is preferred only if no bundled exe is present — and a stray running
+  instance is retired first, so the managed process always owns the
+  single-instance mutex and receives the safety state below;
 - on every change (plus a 2 s heartbeat) the mod writes one JSON line to
   the exe's stdin:
   `{"gui":true,"bow":false,"held":"item.bow","spawn":false,"ally":false}`;

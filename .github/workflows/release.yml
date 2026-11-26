@@ -168,18 +168,6 @@ jobs:
           echo "::error::could not sync the bump (develop moved underneath twice) — re-run the workflow"
           exit 1
 
-      - name: Build the mod (one retry for Forge/MCP download flakes)
-        if: steps.version.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          if ! ./gradlew --no-daemon setupCIWorkspace build; then
-            echo "::warning::first build failed — retrying once (first-run Forge/MCP downloads are flake-prone)"
-            ./gradlew --no-daemon setupCIWorkspace build
-          fi
-          V="${{ steps.version.outputs.version }}"
-          ls -la "build/libs/Abaser-1.8.8-$V.jar" \
-                 "build/libs/Abaser-1.8.8-$V-sources.jar"
-
       - name: Install the cross toolchain (MinGW-w64)
         if: steps.version.outputs.skip != 'true'
         run: |
@@ -201,6 +189,24 @@ jobs:
           ls -la exe-build/AbaserClicker.exe
           cp exe-build/AbaserClicker.exe "Abaser-Clicker-$V-win64.exe"
           sha256sum "Abaser-Clicker-$V-win64.exe"
+          # embed this exact exe into the mod jar: the mod installs and
+          # updates its own clicker from here (zero manual setup — drop the
+          # jar in mods/, the exe unpacks itself on the first world load)
+          mkdir -p src/main/resources/abaser
+          cp exe-build/AbaserClicker.exe src/main/resources/abaser/AbaserClicker.exe
+
+      - name: Build the mod (one retry for Forge/MCP download flakes)
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          if ! ./gradlew --no-daemon setupCIWorkspace build; then
+            echo "::warning::first build failed — retrying once (first-run Forge/MCP downloads are flake-prone)"
+            ./gradlew --no-daemon setupCIWorkspace build
+          fi
+          V="${{ steps.version.outputs.version }}"
+          ls -la "build/libs/Abaser-1.8.8-$V.jar" \
+                 "build/libs/Abaser-1.8.8-$V-sources.jar"
+          unzip -l "build/libs/Abaser-1.8.8-$V.jar" | grep -F 'abaser/AbaserClicker.exe'
 
       - name: Tag the release (lightweight)
         if: steps.version.outputs.skip != 'true'
@@ -280,8 +286,8 @@ jobs:
             echo
             echo "### Artifacts"
             echo
-            echo "- \`Abaser-Clicker-$V-win64.exe\` — **the auto-clicker**. Standalone Windows executable (Win32 + Dear ImGui + DX9): run it next to the game, \`F4\` toggles, \`INSERT\`/\`X\` park it in the system tray (right-click the tray icon to arm/disarm, start it with Windows, or exit). Finds the Minecraft (LWJGL) window and posts clicks to that window only."
-            echo "- \`Abaser-1.8.8-$V.jar\` — the companion mod shell. Loads silently with Forge 1.8.8; it no longer auto-clicks (that is the exe's job now), answers \`/abaser\` in chat, and opens the **in-game panel** (Right Shift, rebindable, or \`/abaser panel\`) where you manage and configure the exe from inside the game — arm/disarm, CPS, chances, block hit, themes — over the settings link. Every click still comes from the exe; while any menu (including the panel) is open or a bow is drawn, the exe holds its clicks."
+            echo "- \`Abaser-1.8.8-$V.jar\` — **the companion mod, and the whole install**: the clicker exe ships INSIDE this jar. Drop it in \`.minecraft/mods\` and the mod unpacks, starts and manages the exe by itself — no separate download, no manual run. It loads silently with Forge 1.8.8, feeds the exe live game state over the settings link, and opens the **in-game panel** (Right Shift, rebindable, or \`/abaser panel\`) where you manage and configure the clicker from inside the game — arm/disarm, CPS, chances, block hit, themes. It does not click: every click comes from the exe process; while any menu (including the panel) is open or a bow is drawn, the exe holds its clicks."
+            echo "- \`Abaser-Clicker-$V-win64.exe\` — the same standalone auto-clicker, published separately for use WITHOUT the mod (Win32 + Dear ImGui + DX9, one file, no runtimes). Run it next to the game, \`F4\` toggles, \`INSERT\`/\`X\` park it in the system tray (right-click the tray icon to arm/disarm, start it with Windows, or exit). Finds the Minecraft (LWJGL) window and posts clicks to that window only."
             echo "- \`Abaser-1.8.8-$V-sources.jar\` — matching mod sources."
             echo
             EXE_SHA=$(sha256sum "Abaser-Clicker-$V-win64.exe" | cut -d' ' -f1)
@@ -289,10 +295,10 @@ jobs:
             echo
             echo "### Install"
             echo
-            echo "1. Download \`Abaser-Clicker-$V-win64.exe\` (and check the SHA256 above)."
-            echo "2. If SmartScreen warns (unsigned binary): right-click → Properties → **Unblock**, then run it."
-            echo "3. In game, press **F4** to toggle the clicker, **INSERT** (or the X button) to park it in the tray — the clickers keep running; right-click the tray icon for the menu (arm/disarm, start with Windows, exit). Settings persist in \`abaser.ini\` next to the exe; \"Start with Windows\" (Settings tab or tray menu) launches it straight into the tray at login."
-            echo "4. Optional: drop the mod jar into \`.minecraft/mods\` (Forge \`11.15.0.1655\`) — it starts the exe in the tray with your server, feeds it game state, and gives you the in-game panel (**Right Shift** or \`/abaser panel\`) to manage and configure the clicker without leaving the game."
+            echo "1. Drop \`Abaser-1.8.8-$V.jar\` into \`.minecraft/mods\` (Forge \`11.15.0.1655\`). **That is the whole install.** The jar carries the clicker exe inside: on your first world load the mod unpacks it to \`.minecraft/Abaser/\`, starts it straight in your system tray, and keeps it current on every mod update (your \`abaser.ini\` settings survive in that same folder). Nothing to download separately, nothing to run by hand — and because the unpacked exe comes from the jar rather than a browser, it carries no download marker and SmartScreen's \"Unblock\" dance does not apply to it."
+            echo "2. What the mod does for you: starts the exe with your server, feeds it live game state and holds its clicks while a menu is open, while you stand in spawn (with the gate on) or while an ally is under your crosshair; it closes the exe when the game closes. The clicks themselves still come from the exe process only — never from the mod."
+            echo "3. In game: **Right Shift** (or \`/abaser panel\`) opens the panel; \`/abaser\` configures the aim assist; \`F4\` toggles the clicker; **INSERT** (or the X button) parks it in the tray — right-click the tray icon for the standalone menu (arm/disarm, start with Windows, exit)."
+            echo "4. Playing WITHOUT the mod? Download \`Abaser-Clicker-$V-win64.exe\` and run it next to the game. If SmartScreen warns (unsigned binary): right-click → Properties → **Unblock**, then run it."
           } > notes.md
           echo "--- notes.md (first 40 lines):"
           head -40 notes.md

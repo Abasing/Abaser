@@ -2,13 +2,19 @@ package net.zaminmc.abaser;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -31,7 +37,9 @@ import net.minecraftforge.fml.common.gameevent.TickEvent;
  * LWJGL window, driven by the exe's own hotkeys and CPS engine). The mod's
  * whole job is five small things:
  *
- *   1. start the exe (hidden in the system tray) when a server/world loads,
+ *   1. install and start the exe (hidden in the system tray) when a
+ *      server/world loads — release jars carry the exe INSIDE, so there is
+ *      nothing to download or run by hand (see resolveExe/bundleExe);
  *   2. feed it live game state over stdin, one JSON line per change:
  *          {"gui":true,"bow":false,"held":"item.bow","spawn":false,"ally":false}
  *      "gui"   — ANY in-game screen is open (inventory, chest, villager,
@@ -60,6 +68,11 @@ public class ClientTickHandler {
 
     private static Process clicker;
     private static BufferedWriter toClicker;
+
+    /** The clicker exe shipped INSIDE this jar (release builds; dev jars omit it). */
+    private static final String BUNDLED_EXE_RESOURCE = "/abaser/AbaserClicker.exe";
+    /** Set when this launch actually installed or updated the managed copy. */
+    private static boolean exeInstalledHere;
 
     private static boolean worldJoined;     // saw a world/server load this session
     private static boolean launchFailed;    // complained once about a missing exe
@@ -142,20 +155,28 @@ public class ClientTickHandler {
         }
     }
 
-    /** Start AbaserClicker.exe in managed tray mode. Never blocks the client tick. */
+    /**
+     * Start AbaserClicker.exe in managed tray mode. Never blocks the client
+     * tick: resolving the exe (first-run extraction) and launching it touch
+     * the disk and the process table, so all of it runs off-thread and only
+     * comes back through chat + the link threads.
+     */
     private static void tryLaunch(final Minecraft mc) {
         if (clicker != null) return;
-        final File exe = findExe(mc);
-        if (exe == null) {
-            if (!launchFailed) {
-                launchFailed = true;
-                chat("AbaserClicker.exe not found - drop it in the game folder or the mods folder.");
-            }
-            return;
-        }
-        // launch off-thread: ProcessBuilder.start can hit disk / AV scanning
         new Thread(new Runnable() {
             public void run() {
+                exeInstalledHere = false;
+                final File exe = resolveExe(mc);
+                if (exe == null) {
+                    if (!launchFailed) {
+                        launchFailed = true;
+                        chat("AbaserClicker.exe not found - drop it in the game folder or the mods folder.");
+                    }
+                    return;
+                }
+                // retire any stray instance FIRST: the child we start must win
+                // the single-instance mutex (see killStrayClickers)
+                killStrayClickers();
                 try {
                     Process p = new ProcessBuilder(exe.getAbsolutePath(), "--managed", "/tray")
                             .start();
@@ -164,7 +185,9 @@ public class ClientTickHandler {
                     haveLast = false;
                     LinkState.reset();
                     startStdoutReader(p);
-                    chat("Abaser Clicker is running in your system tray - it clicks only inside Minecraft.");
+                    chat(exeInstalledHere
+                            ? "Bundled clicker installed to .minecraft/Abaser - Abaser Clicker is running in your system tray."
+                            : "Abaser Clicker is running in your system tray - it clicks only inside Minecraft.");
                     // the exe dumps its current settings on the first line it
                     // sees; asking explicitly too keeps the panel in sync even
                     // if a heartbeat raced the handshake
@@ -175,6 +198,131 @@ public class ClientTickHandler {
                 }
             }
         }, "Abaser-Launch").start();
+    }
+
+    // ------------------------------------------------------------------
+    //  where the exe comes from, in priority order:
+    //
+    //    1. the ABASER_EXE environment variable — explicit developer
+    //       override, used verbatim;
+    //    2. the copy THIS MOD manages under <game dir>/Abaser/, extracted
+    //       from the exe bundled inside this jar. This is the zero-install
+    //       path: the mod carries its own clicker, installs it on first use
+    //       and replaces it with the jar's current build on every update;
+    //    3. legacy manual installs (game folder, mods folder, next to the
+    //       jar) — for dev builds whose jar carries no exe.
+    // ------------------------------------------------------------------
+
+    /** Pick the exe to run. Runs OFF the client tick (may extract files). */
+    private static File resolveExe(final Minecraft mc) {
+        String env = System.getenv("ABASER_EXE");
+        if (env != null && env.trim().length() > 0) {
+            File f = new File(env.trim());
+            if (f.isFile()) return f;
+        }
+        File managed = bundleExe(mc);
+        if (managed != null) return managed;
+        return findInstalledExe(mc);
+    }
+
+    /**
+     * The bundled clicker. Extracts {@link #BUNDLED_EXE_RESOURCE} to
+     * <game dir>/Abaser/AbaserClicker.exe unless a byte-identical copy is
+     * already there. The SHA-1 check is what makes updates work: a newer
+     * jar simply overwrites the older exe in place, and abaser.ini (which
+     * lives next to it) survives untouched. Returns null when this jar
+     * carries no exe, or the disk refuses the write.
+     */
+    private static File bundleExe(final Minecraft mc) {
+        final byte[] bundled = readBundledExe();
+        if (bundled == null) return null;                    // dev jar: no exe inside
+        final File dir = new File(mc.mcDataDir, "Abaser");
+        final File exe = new File(dir, "AbaserClicker.exe");
+        final String want = sha1(bundled);
+        final String have = fileSha1(exe);
+        if (have != null && have.equals(want)) return exe;   // installed and already current
+        exeInstalledHere = true;
+        if (exe.exists()) killStrayClickers();               // a live instance locks the file on Windows
+        if (!dir.isDirectory() && !dir.mkdirs()) return null;
+        final File tmp = new File(dir, "AbaserClicker.exe.new");
+        try {
+            final FileOutputStream out = new FileOutputStream(tmp);
+            try { out.write(bundled); } finally { out.close(); }
+        } catch (IOException e) {
+            Abaser.logger.warn("Abaser: could not write the bundled clicker", e);
+            return null;
+        }
+        if (!tmp.renameTo(exe)) {                            // still locked? one more nudge
+            killStrayClickers();
+            try { Thread.sleep(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            if (exe.exists() && !exe.delete()) return null;
+            if (!tmp.renameTo(exe)) return null;
+        }
+        return exe;
+    }
+
+    private static byte[] readBundledExe() {
+        final InputStream in = ClientTickHandler.class.getResourceAsStream(BUNDLED_EXE_RESOURCE);
+        if (in == null) return null;
+        try {
+            final ByteArrayOutputStream out = new ByteArrayOutputStream(1 << 20);
+            final byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            return out.toByteArray();
+        } catch (IOException e) {
+            return null;
+        } finally {
+            try { in.close(); } catch (IOException ignored) {}
+        }
+    }
+
+    private static String sha1(final byte[] data) {
+        try { return hex(MessageDigest.getInstance("SHA-1").digest(data)); }
+        catch (Exception e) { return ""; }
+    }
+
+    /** SHA-1 of a file on disk, or null when it cannot be read (missing/locked). */
+    private static String fileSha1(final File f) {
+        final InputStream in;
+        try { in = new FileInputStream(f); } catch (IOException e) { return null; }
+        try {
+            final MessageDigest md = MessageDigest.getInstance("SHA-1");
+            final byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) md.update(buf, 0, n);
+            return hex(md.digest());
+        } catch (Exception e) {
+            return null;
+        } finally {
+            try { in.close(); } catch (IOException ignored) {}
+        }
+    }
+
+    private static String hex(final byte[] d) {
+        final StringBuilder sb = new StringBuilder(d.length * 2);
+        for (final byte b : d) {
+            sb.append(Character.forDigit((b >> 4) & 0xF, 16));
+            sb.append(Character.forDigit(b & 0xF, 16));
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Retire any AbaserClicker.exe that is already running — an orphan of a
+     * crashed session, a leftover from an older build, or an instance the
+     * user started by hand. The managed child must OWN the single-instance
+     * mutex, so every click flows through a process that actually receives
+     * the mod's safety state (GUI, spawn, ally, bow); a stray without that
+     * state would click ungated. Windows only: anywhere else, and on any
+     * failure, this is a harmless no-op.
+     */
+    private static void killStrayClickers() {
+        try {
+            final Process p = new ProcessBuilder("taskkill", "/F", "/T", "/IM", "AbaserClicker.exe")
+                    .redirectErrorStream(true).start();
+            if (!p.waitFor(5, TimeUnit.SECONDS)) p.destroy();
+        } catch (Exception ignored) {}   // no taskkill (not Windows) or nothing to kill
     }
 
     /**
@@ -264,16 +412,11 @@ public class ClientTickHandler {
     }
 
     /**
-     * Where the exe may live. The Run-key autostart copy and a manually
-     * started standalone instance are both fine too — the exe's own
-     * single-instance guard keeps the two from stacking.
+     * Legacy fallback: a manually installed copy (dev builds whose jar
+     * carries no bundled exe, or a user's own arrangement). Checked AFTER
+     * the bundled copy — {@link #resolveExe} owns the priority order.
      */
-    private static File findExe(Minecraft mc) {
-        String env = System.getenv("ABASER_EXE");
-        if (env != null && env.trim().length() > 0) {
-            File f = new File(env.trim());
-            if (f.isFile()) return f;
-        }
+    private static File findInstalledExe(Minecraft mc) {
         String[] names = { "AbaserClicker.exe", "abaserclicker.exe" };
         File base = mc.mcDataDir;
         String[] dirs = { "", "mods", "mods/Abaser", "mods/abaser", "Abaser" };
