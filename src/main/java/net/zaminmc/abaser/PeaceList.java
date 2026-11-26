@@ -49,7 +49,8 @@ public final class PeaceList {
     private static boolean capturing = false;
     private static int remaining = 0;
 
-    private PeaceList() {}
+    /** Registered by ClientProxy on the forge bus. */
+    public PeaceList() {}
 
     // ---- the event (registered on the forge bus by ClientProxy) --------------
 
@@ -91,7 +92,7 @@ public final class PeaceList {
         try {
             final Minecraft mc = Minecraft.getMinecraft();
             return mc.thePlayer != null
-                    && name.equalsIgnoreCase(mc.thePlayer.getCommandSenderName());
+                    && name.equalsIgnoreCase(mc.thePlayer.getName());
         } catch (Exception e) { return false; }
     }
 

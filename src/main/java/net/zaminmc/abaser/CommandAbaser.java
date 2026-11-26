@@ -86,7 +86,7 @@ public class CommandAbaser extends CommandBase {
                 try {
                     for (Object o : Minecraft.getMinecraft().theWorld.playerEntities) {
                         if (o instanceof EntityPlayer) {
-                            names.add(((EntityPlayer) o).getCommandSenderName());
+                            names.add(((EntityPlayer) o).getName());
                         }
                     }
                 } catch (Exception ignored) {}
@@ -191,7 +191,7 @@ public class CommandAbaser extends CommandBase {
                 || (args.length == 1 && sender != null)) {
             final List<String> l = cfg.manualExceptions;
             if (l.isEmpty()) { msg(sender, "no manual exceptions - everyone but the peace list is fair game"); return; }
-            msg(sender, "manual exceptions (" + l.size() + "): " + join(l));
+            msg(sender, "manual exceptions (" + l.size() + "): " + joinNames(l));
             return;
         }
         msg(sender, "usage: /abaser except add|remove NAME - list|clear");
@@ -232,7 +232,7 @@ public class CommandAbaser extends CommandBase {
             }
             if (s.equals("list")) {
                 if (cfg.lockNames.isEmpty()) { msg(sender, "lock list is empty"); return; }
-                msg(sender, "locked targets (" + cfg.lockNames.size() + "): " + join(cfg.lockNames)
+                msg(sender, "locked targets (" + cfg.lockNames.size() + "): " + joinNames(cfg.lockNames)
                         + (cfg.lockEnabled ? "" : " - lock is OFF"));
                 return;
             }
@@ -304,12 +304,12 @@ public class CommandAbaser extends CommandBase {
                     + " \"You have peace with N player(s)\"");
             return;
         }
-        msg(sender, "peace list (" + names.size() + "): " + join(new ArrayList<String>(names)));
+        msg(sender, "peace list (" + names.size() + "): " + joinNames(new ArrayList<String>(names)));
     }
 
     // ---- helpers ---------------------------------------------------------------
 
-    private static String join(List<String> l) {
+    private static String joinNames(List<String> l) {
         final StringBuilder sb = new StringBuilder(128);
         for (int i = 0; i < l.size(); i++) {
             if (i > 0) sb.append(", ");

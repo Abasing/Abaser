@@ -102,7 +102,7 @@ public final class AimAssist {
     /** Current target's name for the panel ("target: <name>"), or null. */
     public static String targetName() {
         final EntityPlayer t = INSTANCE.target;
-        return t == null ? null : t.getCommandSenderName();
+        return t == null ? null : t.getName();
     }
 
     // ---- the engine ----------------------------------------------------------
@@ -147,7 +147,7 @@ public final class AimAssist {
         if (mc.currentScreen != null || mc.objectMouseOver == null) return false;
         if (mc.objectMouseOver.typeOfHit != MovingObjectPosition.MovingObjectType.ENTITY) return false;
         if (!(mc.objectMouseOver.entityHit instanceof EntityPlayer)) return false;
-        final String name = ((EntityPlayer) mc.objectMouseOver.entityHit).getCommandSenderName();
+        final String name = ((EntityPlayer) mc.objectMouseOver.entityHit).getName();
         return PeaceList.contains(name) || cfg.hasException(name);
     }
 
@@ -165,7 +165,7 @@ public final class AimAssist {
     private boolean keepValid(EntityPlayer p) {
         if (p.isDead || p.worldObj != mc.theWorld) return false;
         if (p == mc.thePlayer) return false;
-        final String name = p.getCommandSenderName();
+        final String name = p.getName();
         if (!lockPass(name) || isExcepted(name)) return false;
         final double distance = mc.thePlayer.getDistanceToEntity(p);
         if (distance > cfg.maxDistance + KEEP_DISTANCE_PAD) return false;
@@ -181,7 +181,7 @@ public final class AimAssist {
             if (!(o instanceof EntityPlayer)) continue;
             final EntityPlayer p = (EntityPlayer) o;
             if (p == mc.thePlayer || p.isDead) continue;
-            final String name = p.getCommandSenderName();
+            final String name = p.getName();
             if (!lockPass(name) || isExcepted(name)) continue;
 
             final double distance = mc.thePlayer.getDistanceToEntity(p);
