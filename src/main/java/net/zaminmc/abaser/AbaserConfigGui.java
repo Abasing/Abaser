@@ -161,6 +161,11 @@ public class AbaserConfigGui extends GuiScreen {
     private String spawnErr = null;                         // last parse error, if any
     private boolean radiusDrag = false;
 
+    // field hit boxes {x,y,w,h} — 1.8.8's GuiTextField.mouseClicked returns
+    // void, so the "was the click inside the field" test is ours to do
+    private int[] exAddBox, lockAddBox;
+    private final int[][] spawnBox = new int[6][];
+
     // friends-tab card geometry (shared by draw + hit tests)
     private int exCardX()   { return px + 8; }
     private int exCardY()   { return py + 38; }
@@ -170,7 +175,9 @@ public class AbaserConfigGui extends GuiScreen {
     private void initNameFields() {
         final int ax = exCardX();
         exAdd  = makeField(1, ax + 8, exCardY() + 58, 168);
+        exAddBox = new int[] { ax + 8, exCardY() + 58, 168, 13 };
         lockAdd = makeField(2, ax + 8, lockCardY() + 58, 168);
+        lockAddBox = new int[] { ax + 8, lockCardY() + 58, 168, 13 };
         final float[] cur = {
             AimAssist.cfg.spawnX1, AimAssist.cfg.spawnY1, AimAssist.cfg.spawnZ1,
             AimAssist.cfg.spawnX2, AimAssist.cfg.spawnY2, AimAssist.cfg.spawnZ2
@@ -179,6 +186,7 @@ public class AbaserConfigGui extends GuiScreen {
         final int[] fx = { px + 20, px + 124 };             // min / max columns
         for (int i = 0; i < 6; i++) {
             spawnField[i] = makeField(3 + i, fx[i % 2], fy[i / 2], i % 2 == 0 ? 88 : 92);
+            spawnBox[i] = new int[] { fx[i % 2], fy[i / 2], i % 2 == 0 ? 88 : 92, 13 };
             spawnField[i].setText(fmt(cur[i]));
         }
     }
@@ -187,6 +195,14 @@ public class AbaserConfigGui extends GuiScreen {
         final GuiTextField f = new GuiTextField(id, this.fontRendererObj, x, y, w, 13);
         f.setMaxStringLength(id >= 3 ? 12 : 16);
         return f;
+    }
+
+    /** Route a click to a field (focus/cursor handled internally by
+     *  GuiTextField), then report whether the click landed inside it. */
+    private boolean clickField(GuiTextField f, int[] box, int mx, int my, int btn) {
+        if (f == null || box == null) return false;
+        f.mouseClicked(mx, my, btn);
+        return inRect(mx, my, box[0], box[1], box[2], box[3]);
     }
 
     /** Copy the exe's last canonical config into the working copy. */
@@ -1020,8 +1036,8 @@ public class AbaserConfigGui extends GuiScreen {
 
         // friends tab: edit the mod's own lists
         if (tab == 2) {
-            if (exAdd != null && exAdd.mouseClicked(mx, my, btn)) return;
-            if (lockAdd != null && lockAdd.mouseClicked(mx, my, btn)) return;
+            if (clickField(exAdd, exAddBox, mx, my, btn)) return;
+            if (clickField(lockAdd, lockAddBox, mx, my, btn)) return;
             final List<String> exL = AimAssist.cfg.manualExceptions;
             for (Map.Entry<Integer, int[]> e : exRemoveHit.entrySet()) {
                 final int[] r = e.getValue();
@@ -1058,8 +1074,10 @@ public class AbaserConfigGui extends GuiScreen {
 
         // spawn tab: mod-side box + gates (click gate needs the link)
         if (tab == 3) {
-            for (GuiTextField f : spawnField)
-                if (f != null && f.mouseClicked(mx, my, btn)) return;
+            boolean fieldHit = false;
+            for (int i = 0; i < 6; i++)
+                if (clickField(spawnField[i], spawnBox[i], mx, my, btn)) fieldHit = true;
+            if (fieldHit) return;
             if (radiusHit(mx, my)) { radiusDrag = true; radiusApply(mx); return; }
             if (aroundHit != null && inRect(mx, my, aroundHit[0], aroundHit[1], 104, 13)) {
                 spawnAroundMe(); return;
