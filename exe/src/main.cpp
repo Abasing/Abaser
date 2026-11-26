@@ -49,6 +49,7 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <algorithm>
 #include <deque>
 #include <chrono>
 #include <cstdio>
@@ -179,6 +180,18 @@ static int PollBindKeyPlatform(void*)
 // between min and max. "Block Hit" additionally right-clicks (sword block)
 // during left clicks with its own probability.
 //
+// Both channels share this one thread but are TIMED INDEPENDENTLY: each side
+// carries its own next-click deadline and pending-release deadline, so the
+// left timing math can no longer stall the right channel (and vice versa) —
+// the two configured CPS ranges behave independently. Nothing in the loop
+// blocks: a press is a DOWN post + a release deadline, and the loop sleeps
+// only until the nearest deadline. The only deliberate coupling is the RIGHT
+// button itself: the right autoclicker and a Block Hit tap never hold the
+// right button at the same time (the game can't nest two presses).
+//
+// Settings are copied under g_state_mutex each pass — the mod link and the
+// UI write them from their own threads (see ui_state.h THREAD MODEL).
+//
 // The click GATES live in ui_state.h (shared with the simulator):
 //   * any open in-game GUI (mod state) blocks everything,
 //   * a drawn bow blocks every right-click emission — left keeps clicking.
@@ -186,75 +199,110 @@ static int PollBindKeyPlatform(void*)
 static void ClickerThread()
 {
     const float RAND_MAX_F = 32767.0f;
-    for (;;) {
-        HWND target = FindWindowA("LWJGL", nullptr);
+    const auto now_ms = [] {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    };
 
-        const bool focus_ok = !require_focus
+    // per-channel deadlines (ms ticks): next due click + pending release
+    long long left_next = 0, left_up = 0;
+    long long right_next = 0, right_up = 0;
+    long long bh_up = 0;                       // pending Block Hit release
+    bool      bh_pending = false;              // a tap waiting for a free R button
+
+    for (;;) {
+        const long long now = now_ms();
+
+        // settings snapshot — the mod link and the UI write these from their
+        // own threads; copy them under the state mutex, then decide off it
+        bool s_left_on, s_right_on, s_legacy, s_bh, s_focus;
+        int  s_lhit, s_rhit, s_bhch;
+        float s_lmin, s_lmax, s_rmin, s_rmax;
+        {
+            std::lock_guard<std::recursive_mutex> lk(g_state_mutex);
+            s_left_on = left_enabled;    s_right_on = right_enabled;
+            s_legacy  = legacy_timing;   s_bh   = blockhit;
+            s_focus   = require_focus;
+            s_lhit    = hit_chance;      s_rhit = right_chance;
+            s_bhch    = blockhit_chance;
+            s_lmin    = left_min_cps;    s_lmax = left_max_cps;
+            s_rmin    = right_min_cps;   s_rmax = right_max_cps;
+        }
+
+        HWND target = FindWindowA("LWJGL", nullptr);
+        const bool focus_ok = !s_focus
             || (target != nullptr && GetForegroundWindow() == target);
         const bool base_ok  = (target != nullptr) && focus_ok;
 
-        // ---- left button ----
-        const bool left_go = left_enabled && GateLeft(base_ok,
-            (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0);
-        if (left_go) {
-            if (rand() % 100 < hit_chance) {
-                PostMessageA(target, WM_LBUTTONDOWN, MK_LBUTTON, 0);
-                if (legacy_timing) {
-                    float cps = left_min_cps + (left_max_cps - left_min_cps) * (rand() / RAND_MAX_F);
-                    precise_sleep((long long)(100.0f / cps));
-                } else {
-                    precise_sleep(2);     // believable press duration
-                }
-                PostMessageA(target, WM_LBUTTONUP, MK_LBUTTON, 0);
+        // ---- releases first: a press never holds the loop hostage ----
+        if (left_up && now >= left_up) {
+            if (target) PostMessageA(target, WM_LBUTTONUP, MK_LBUTTON, 0);
+            left_up = 0;
+            // Block Hit rides on a finished left press, exactly like before:
+            // the tap is decided when the left click is released.
+            if (s_bh && GateBlockHit() && rand() % 100 < s_bhch)
+                bh_pending = true;                   // start once R is free
+        }
+        if (right_up && now >= right_up) {
+            if (target) PostMessageA(target, WM_RBUTTONUP, MK_RBUTTON, 0);
+            right_up = 0;
+        }
+        if (bh_up && now >= bh_up) {
+            if (target) PostMessageA(target, WM_RBUTTONUP, MK_RBUTTON, 0);
+            bh_up = 0;
+        }
+
+        // ---- left channel ----
+        if (!left_up && now >= left_next) {
+            const bool go = s_left_on && GateLeft(base_ok,
+                (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0);
+            if (go && rand() % 100 < s_lhit) {
+                if (target) PostMessageA(target, WM_LBUTTONDOWN, MK_LBUTTON, 0);
                 RecordClick(true);
-
-                if (blockhit && GateBlockHit() && rand() % 100 < blockhit_chance) {
-                    PostMessageA(target, WM_RBUTTONDOWN, MK_RBUTTON, 0);
-                    precise_sleep(20);
-                    PostMessageA(target, WM_RBUTTONUP, MK_RBUTTON, 0);
-                    RecordClick(false);
-                }
-
-                if (legacy_timing) {
-                    float cps2 = left_min_cps + (left_max_cps - left_min_cps) * (rand() / RAND_MAX_F);
-                    int gap = (cps2 > 14.0f) ? 300 : 400;
-                    precise_sleep((long long)(gap / cps2));
-                } else {
-                    float cps = left_min_cps + (left_max_cps - left_min_cps) * (rand() / RAND_MAX_F);
-                    long long total = (long long)(1000.0f / cps);
-                    precise_sleep(total > 2 ? total - 2 : 1);
-                }
+                long long press = 0, gap = 0;
+                ClickTiming(s_legacy, s_lmin, s_lmax,
+                            rand() / RAND_MAX_F, rand() / RAND_MAX_F, &press, &gap);
+                left_up   = now + press;
+                left_next = left_up + gap;
+            } else {
+                left_next = now + 1;                 // closed gate / missed roll: retry next ms
             }
         }
 
-        // ---- right button ----
-        const bool right_go = right_enabled && GateRight(base_ok,
-            (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0);
-        if (right_go) {
-            if (rand() % 100 < right_chance) {
-                PostMessageA(target, WM_RBUTTONDOWN, MK_RBUTTON, 0);
-                if (legacy_timing) {
-                    float cps = right_min_cps + (right_max_cps - right_min_cps) * (rand() / RAND_MAX_F);
-                    precise_sleep((long long)(100.0f / cps));
-                } else {
-                    precise_sleep(2);
-                }
-                PostMessageA(target, WM_RBUTTONUP, MK_RBUTTON, 0);
+        // ---- right channel (its own deadlines — no longer queued behind left) ----
+        if (!right_up && !bh_up && now >= right_next) {
+            const bool go = s_right_on && GateRight(base_ok,
+                (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0);
+            if (go && rand() % 100 < s_rhit) {
+                if (target) PostMessageA(target, WM_RBUTTONDOWN, MK_RBUTTON, 0);
                 RecordClick(false);
-
-                if (legacy_timing) {
-                    float cps2 = right_min_cps + (right_max_cps - right_min_cps) * (rand() / RAND_MAX_F);
-                    int gap = (left_max_cps > 14.0f) ? 300 : 400;
-                    precise_sleep((long long)(gap / cps2));
-                } else {
-                    float cps = right_min_cps + (right_max_cps - right_min_cps) * (rand() / RAND_MAX_F);
-                    long long total = (long long)(1000.0f / cps);
-                    precise_sleep(total > 2 ? total - 2 : 1);
-                }
+                long long press = 0, gap = 0;
+                ClickTiming(s_legacy, s_rmin, s_rmax,   // RIGHT range — the legacy gap reads its own side
+                            rand() / RAND_MAX_F, rand() / RAND_MAX_F, &press, &gap);
+                right_up   = now + press;
+                right_next = right_up + gap;
+            } else {
+                right_next = now + 1;
             }
         }
 
-        precise_sleep(1);
+        // ---- Block Hit tap: fire once the right button is free ----
+        if (bh_pending && !right_up) {
+            bh_pending = false;
+            if (target) PostMessageA(target, WM_RBUTTONDOWN, MK_RBUTTON, 0);
+            RecordClick(false);
+            bh_up = now + 20;
+        }
+
+        // sleep only until the nearest deadline (2 ms cap keeps gate latency tiny)
+        long long until = now + 2;
+        if (left_up)     until = std::min(until, left_up);
+        if (right_up)    until = std::min(until, right_up);
+        if (bh_up)       until = std::min(until, bh_up);
+        if (!left_up  && left_next  > now) until = std::min(until, left_next);
+        if (!right_up && right_next > now) until = std::min(until, right_next);
+        const long long wait = std::max<long long>(0, std::min<long long>(until - now, 2));
+        if (wait > 0) precise_sleep(wait);
     }
 }
 
@@ -340,24 +388,32 @@ static void ModLinkThread()
 
             const bool first_contact = !g_mod_linked.load();
 
-            // ---- in-game panel settings (the mod turns the same knobs) ----
-            if (ApplyJsonConfig(line) > 0) {
-                SaveConfig(ConfigPath());            // persist like the UI does
-                snprintf(g_config_status, sizeof(g_config_status), "%s",
-                         VSTR("settings applied from the in-game panel"));
-                ModOut(BuildConfigJson());           // canonical echo
+            // ---- settings + state flags: written under the state mutex ----
+            // (ModOut stays OUTSIDE the lock — a blocked pipe write must never
+            //  stall the clicker thread's gate checks)
+            std::string echo;
+            {
+                std::lock_guard<std::recursive_mutex> lk(g_state_mutex);
+                // ---- in-game panel settings (the mod turns the same knobs) ----
+                if (ApplyJsonConfig(line) > 0) {
+                    SaveConfig(ConfigPath());            // persist like the UI does
+                    snprintf(g_config_status, sizeof(g_config_status), "%s",
+                             VSTR("settings applied from the in-game panel"));
+                    echo = BuildConfigJson();            // canonical echo
+                }
+                const int gui   = ModJsonFlag(line, "gui");
+                const int bow   = ModJsonFlag(line, "bow");
+                const int spawn = ModJsonFlag(line, "spawn");
+                const int ally  = ModJsonFlag(line, "ally");
+                if (gui >= 0)   mod_gui_open        = gui != 0;
+                if (bow >= 0)   mod_holding_bow     = bow != 0;
+                if (spawn >= 0) mod_in_spawn        = spawn != 0;
+                if (ally >= 0)  mod_ally_crosshair  = ally != 0;
             }
+            if (!echo.empty())
+                ModOut(echo);
             if (line.find("\"get\"") != std::string::npos)
                 ModOut(BuildConfigJson());           // panel (re)opened: dump
-
-            const int gui = ModJsonFlag(line, "gui");
-            const int bow = ModJsonFlag(line, "bow");
-            const int spawn = ModJsonFlag(line, "spawn");
-            const int ally  = ModJsonFlag(line, "ally");
-            if (gui >= 0)   mod_gui_open        = gui != 0;
-            if (bow >= 0)   mod_holding_bow     = bow != 0;
-            if (spawn >= 0) mod_in_spawn        = spawn != 0;
-            if (ally >= 0)  mod_ally_crosshair  = ally != 0;
             g_mod_linked = true;
 
             if (first_contact)
@@ -470,8 +526,11 @@ static void RefreshTrayTip()
     for (int i = 0; i < 31 && ABASER_VERSION[i]; i++)
         ver[i] = (wchar_t)(unsigned char)ABASER_VERSION[i];
     wchar_t tip[128] = {};
-    swprintf(tip, 128, L"Abaser Clicker %s | L:%s R:%s",
-             ver, left_enabled ? L"ON" : L"off", right_enabled ? L"ON" : L"off");
+    {
+        std::lock_guard<std::recursive_mutex> lk(g_state_mutex);   // reads the armed flags
+        swprintf(tip, 128, L"Abaser Clicker %s | L:%s R:%s",
+                 ver, left_enabled ? L"ON" : L"off", right_enabled ? L"ON" : L"off");
+    }
     NOTIFYICONDATAW nid = {};
     nid.cbSize = sizeof(nid);
     nid.hWnd   = g_trayWnd;
@@ -583,14 +642,18 @@ static void TrayContextMenu()
 {
     HMENU m = ::CreatePopupMenu();
     if (m == nullptr) return;
-    ::AppendMenuW(m, MF_STRING, IDM_TRAY_SHOW,
-                  window_hidden ? L"Show" : L"Hide to tray");
-    ::AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-    ::AppendMenuW(m, MF_STRING | (left_enabled  ? MF_CHECKED : 0), IDM_TRAY_LEFT,  L"Left clicker");
-    ::AppendMenuW(m, MF_STRING | (right_enabled ? MF_CHECKED : 0), IDM_TRAY_RIGHT, L"Right clicker");
-    ::AppendMenuW(m, MF_STRING | (start_with_windows ? MF_CHECKED : 0), IDM_TRAY_AUTO, L"Start with Windows");
-    ::AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-    ::AppendMenuW(m, MF_STRING, IDM_TRAY_EXIT, L"Exit");
+    // the armed-state checks below read the same flags the mod link writes
+    {
+        std::lock_guard<std::recursive_mutex> lk(g_state_mutex);
+        ::AppendMenuW(m, MF_STRING, IDM_TRAY_SHOW,
+                      window_hidden ? L"Show" : L"Hide to tray");
+        ::AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+        ::AppendMenuW(m, MF_STRING | (left_enabled  ? MF_CHECKED : 0), IDM_TRAY_LEFT,  L"Left clicker");
+        ::AppendMenuW(m, MF_STRING | (right_enabled ? MF_CHECKED : 0), IDM_TRAY_RIGHT, L"Right clicker");
+        ::AppendMenuW(m, MF_STRING | (start_with_windows ? MF_CHECKED : 0), IDM_TRAY_AUTO, L"Start with Windows");
+        ::AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+        ::AppendMenuW(m, MF_STRING, IDM_TRAY_EXIT, L"Exit");
+    }
 
     POINT pt = {};
     ::GetCursorPos(&pt);
@@ -626,8 +689,16 @@ static LRESULT CALLBACK TrayWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM l
     if (msg == WM_COMMAND) {
         switch (LOWORD(wParam)) {
         case IDM_TRAY_SHOW:  window_hidden = !window_hidden;             break;
-        case IDM_TRAY_LEFT:  left_enabled  = !left_enabled;              break;
-        case IDM_TRAY_RIGHT: right_enabled = !right_enabled;             break;
+        case IDM_TRAY_LEFT:                                                      // armed flags are
+        case IDM_TRAY_RIGHT:                                                     // shared with the engine
+            {                                                                     // and the mod link —
+                std::lock_guard<std::recursive_mutex> lk(g_state_mutex);          // flip them under the
+                left_enabled  = (LOWORD(wParam) == IDM_TRAY_LEFT)                 // state mutex
+                                    ? !left_enabled : left_enabled;
+                right_enabled = (LOWORD(wParam) == IDM_TRAY_RIGHT)
+                                    ? !right_enabled : right_enabled;
+            }
+            break;
         case IDM_TRAY_AUTO:
             start_with_windows = !start_with_windows;
             SetAutostart(start_with_windows);
@@ -847,7 +918,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     bool running = true;
     bool last_hidden = window_hidden;
     bool prev_left_key = false, prev_right_key = false, prev_hide_key = false;
-    bool tip_l = left_enabled, tip_r = right_enabled;
+    bool tip_l = false, tip_r = false, prev_tip_l = false, prev_tip_r = false;
+    {
+        std::lock_guard<std::recursive_mutex> lk(g_state_mutex);
+        tip_l = prev_tip_l = left_enabled;
+        tip_r = prev_tip_r = right_enabled;
+    }
 
     AbaserUIHost host = {};
     host.mc_found          = &HostMcFound;
@@ -880,10 +956,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         ImGui_ImplDX9_NewFrame();
         ImGui::NewFrame();
 
-        // Bind watchers (F4 / F4 / INSERT by default, edge-triggered)
-        WatchBindToggle(left_bind,  &left_enabled,  &prev_left_key);
-        WatchBindToggle(right_bind, &right_enabled, &prev_right_key);
-        WatchBindToggle(hide_bind,  &window_hidden, &prev_hide_key);
+        // Bind watchers (F4 / F4 / INSERT by default, edge-triggered). The
+        // binds and the enabled flags are shared with the engine + mod link:
+        // flip them under the state mutex (see ui_state.h THREAD MODEL).
+        {
+            std::lock_guard<std::recursive_mutex> lk(g_state_mutex);
+            WatchBindToggle(left_bind,  &left_enabled,  &prev_left_key);
+            WatchBindToggle(right_bind, &right_enabled, &prev_right_key);
+            WatchBindToggle(hide_bind,  &window_hidden, &prev_hide_key);
+        }
 
         // Window visibility toggle: INSERT, the X button and the tray icon
         // all flip the same flag — the clickers never notice.
@@ -903,21 +984,31 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         }
 
         // tray tooltip tracks the armed state (one API call per change)
-        if (tip_l != left_enabled || tip_r != right_enabled) {
-            tip_l = left_enabled;
-            tip_r = right_enabled;
+        {
+            std::lock_guard<std::recursive_mutex> lk(g_state_mutex);
+            if (tip_l != left_enabled || tip_r != right_enabled) {
+                tip_l = left_enabled;
+                tip_r = right_enabled;
+            }
+        }
+        if (tip_l != prev_tip_l || tip_r != prev_tip_r) {
+            prev_tip_l = tip_l;
+            prev_tip_r = tip_r;
             RefreshTrayTip();
         }
 
-        host.live_cps_left  = LiveCps(true);
-        host.live_cps_right = LiveCps(false);
-        host.mod_linked      = g_mod_linked.load();
-        host.mod_gui_open    = mod_gui_open;
-        host.mod_holding_bow = mod_holding_bow;
-        host.mod_in_spawn    = mod_in_spawn;
-        host.mod_ally_crosshair = mod_ally_crosshair;
+        {
+            std::lock_guard<std::recursive_mutex> lk(g_state_mutex);
+            host.live_cps_left  = LiveCps(true);
+            host.live_cps_right = LiveCps(false);
+            host.mod_linked      = g_mod_linked.load();
+            host.mod_gui_open    = mod_gui_open;
+            host.mod_holding_bow = mod_holding_bow;
+            host.mod_in_spawn    = mod_in_spawn;
+            host.mod_ally_crosshair = mod_ally_crosshair;
+        }
 
-        DrawUI(host, ABASER_VERSION);
+        DrawUI(host, ABASER_VERSION);   // takes g_state_mutex itself
 
         // ---- finish frame + present -----------------------------------------
         ImGui::EndFrame();

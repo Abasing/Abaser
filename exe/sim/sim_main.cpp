@@ -243,6 +243,31 @@ int main(int argc, char** argv)
     }
 
     // ------------------------------------------------------------------
+    // CLICK TIMING, regression-tested (shared engine math):
+    // the legacy right-click gap once read left_max_cps — the right channel
+    // used the wrong range for its 300/400 divisor. The math now lives in
+    // one shared function and both channels must pass it.
+    // ------------------------------------------------------------------
+    {
+        long long p = 0, g = 0;
+        // legacy, cold draw (cps2 = 10): press 100/10, gap 400/10
+        ClickTiming(true, 10.0f, 10.0f, 0.5f, 0.5f, &p, &g);
+        Check(p == 10 && g == 40, "timing: legacy cold draw -> 400 divisor, own range");
+        // legacy, hot draw (cps2 = 20): press 100/20, gap 300/20 — the case
+        // that broke when the right channel read the LEFT max cps
+        ClickTiming(true, 20.0f, 20.0f, 0.5f, 0.5f, &p, &g);
+        Check(p == 5 && g == 15, "timing: legacy hot draw -> 300 divisor, own range");
+        // legacy with a spread: same range for press and gap draws
+        ClickTiming(true, 8.0f, 16.0f, 0.0f, 1.0f, &p, &g);
+        Check(p == 12 && g == 18, "timing: legacy spread draw -> press 100/8, gap 300/16");
+        // normal mode: 2 ms press, remainder of 1000/cps as the gap
+        ClickTiming(false, 10.0f, 10.0f, 0.5f, 0.5f, &p, &g);
+        Check(p == 2 && g == 98, "timing: normal mode -> 2 ms press, 1000/cps cycle");
+        ClickTiming(false, 25.0f, 25.0f, 0.5f, 0.5f, &p, &g);
+        Check(p == 2 && g == 38, "timing: normal mode at 25 cps -> 40 ms cycle");
+    }
+
+    // ------------------------------------------------------------------
     // THE CLICK BUG, regression-tested:
     // every one of these used to land on the 800x800 SkipItems overlay
     // window and do nothing. Now they must all work.

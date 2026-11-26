@@ -21,6 +21,7 @@
 #include <string>
 #include <fstream>
 #include <mutex>
+#include <atomic>
 
 // ---------------------------------------------------------------------------
 // String obfuscation ("the key is in the source code")
@@ -107,6 +108,15 @@ inline ImVec4 OnColor(const ImVec4& bg) { return Luma01(bg) > 0.55f ? ImVec4(0.1
 // --- live state from the companion mod ---------------------------------------
 // The mod feeds this over the stdin link (see main.cpp ModLinkThread). When
 // the exe runs standalone, everything stays false — the gates are wide open.
+//
+// THREAD MODEL: these globals are touched by four threads (mod link writes
+// them, the clicker engine evaluates them, the UI displays them, the status
+// streamer reads them). Plain accesses across threads are a C++ data race,
+// so every read/write below goes through g_state_mutex. The mutex is
+// RECURSIVE on purpose — the UI frame holds it for its whole pass and calls
+// LoadConfig/SaveConfig, which lock it again.
+inline std::recursive_mutex g_state_mutex;
+
 inline bool mod_gui_open    = false;   // any in-game GUI/screen is open
 inline bool mod_holding_bow = false;   // the player is holding a bow
 inline bool mod_in_spawn    = false;   // the player stands inside the spawn box
@@ -151,24 +161,58 @@ inline int    g_tab            = 0;
 //   * a drawn bow blocks every RIGHT-click emission (the right autoclicker
 //     and Block Hit's sword-block taps) so charging feels normal; left clicks
 //     are untouched.
+// Each gate takes the state mutex — the policy is unchanged, but now the
+// clicker thread can evaluate it safely while the mod link writes the flags.
 inline bool GateLeft(bool base_ok, bool hold_key_down)
 {
+    std::lock_guard<std::recursive_mutex> lk(g_state_mutex);
     return base_ok && !mod_gui_open && !(spawn_gate && mod_in_spawn)
         && !mod_ally_crosshair && (!hold_mode || hold_key_down);
 }
 inline bool GateRight(bool base_ok, bool hold_key_down)
 {
+    std::lock_guard<std::recursive_mutex> lk(g_state_mutex);
     return base_ok && !mod_gui_open && !(spawn_gate && mod_in_spawn)
         && !mod_ally_crosshair && !mod_holding_bow && (!hold_mode || hold_key_down);
 }
 inline bool GateBlockHit()
 {
+    std::lock_guard<std::recursive_mutex> lk(g_state_mutex);
     return !mod_gui_open && !(spawn_gate && mod_in_spawn)
         && !mod_ally_crosshair && !mod_holding_bow;
 }
 
-inline unsigned long long g_left_total  = 0;   // lifetime counters (engine-side)
-inline unsigned long long g_right_total = 0;
+// --- click timing (engine + simulator share this) ----------------------------
+// One click's timing from two random draws in [0,1): how long the button is
+// held (press) and the gap from release to the next click. legacy_timing
+// reproduces the classic's ~2x CPS math: the press is 100/cps long and the
+// gap takes a FRESH draw — 300/cps2 when that draw is hot (cps2 > 14) else
+// 400/cps2. Normal mode: 2 ms press, the remainder of 1000/cps as the gap.
+//
+// min_cps/max_cps MUST come from the same channel as the caller: the legacy
+// right-click gap used to read left_max_cps here (a one-word bug that
+// silently changed hot right-clickers' rhythm), which is why the math now
+// lives in one tested function instead of two copies in the engine.
+inline void ClickTiming(bool legacy, float min_cps, float max_cps,
+                        float rnd_press, float rnd_gap,
+                        long long* press_ms, long long* gap_ms)
+{
+    const float cps = min_cps + (max_cps - min_cps) * rnd_press;
+    *press_ms = legacy ? (long long)(100.0f / cps) : 2;
+    if (legacy) {
+        const float cps2 = min_cps + (max_cps - min_cps) * rnd_gap;
+        const int gap = (cps2 > 14.0f) ? 300 : 400;
+        *gap_ms = (long long)(gap / cps2);
+    } else {
+        const long long total = (long long)(1000.0f / cps);
+        *gap_ms = total > 2 ? total - 2 : 1;
+    }
+}
+
+// Lifetime counters — the engine increments them, the UI resets and prints
+// them: atomic so neither side can tear a 64-bit write.
+inline std::atomic<unsigned long long> g_left_total  = 0;   // lifetime counters (engine-side)
+inline std::atomic<unsigned long long> g_right_total = 0;
 
 // small shared status line (save/reload/autostart feedback), UI-shown
 inline char   g_config_status[192] = "settings load at startup and save on exit";
@@ -322,6 +366,9 @@ inline void ResetDefaults()
     right_enabled    = false;
 }
 
+// Callers must hold g_state_mutex (LoadConfig, ApplyJsonConfig, the UI frame
+// all do). Keeping the lock out of here lets callers batch several writes
+// into one critical section.
 inline void ApplyConfigKey(const std::string& key, const std::string& val)
 {
     const char* v = val.c_str();
@@ -357,8 +404,9 @@ inline void ApplyConfigKey(const std::string& key, const std::string& val)
 
 inline bool LoadConfig(const std::string& path)
 {
-    static std::mutex s_cfg_mutex;   // the mod link can apply configs off-thread
-    std::lock_guard<std::mutex> lock(s_cfg_mutex);
+    static std::mutex s_cfg_mutex;   // the file itself: UI + mod link + startup
+    std::lock_guard<std::mutex> file_lock(s_cfg_mutex);
+    std::lock_guard<std::recursive_mutex> state_lock(g_state_mutex);
     std::ifstream in(path.c_str());
     if (!in) return false;
     std::string line;
@@ -376,7 +424,8 @@ inline bool LoadConfig(const std::string& path)
 inline bool SaveConfig(const std::string& path)
 {
     static std::mutex s_cfg_mutex;   // same file can be saved by UI + mod link
-    std::lock_guard<std::mutex> lock(s_cfg_mutex);
+    std::lock_guard<std::mutex> file_lock(s_cfg_mutex);
+    std::lock_guard<std::recursive_mutex> state_lock(g_state_mutex);
     std::ofstream out(path.c_str());
     if (!out) return false;
     out << "# Abaser Clicker settings (loaded at startup, saved on exit)\n";
@@ -459,6 +508,7 @@ inline int ApplyJsonConfig(const std::string& line)
 {
     int applied = 0;
     std::string val;
+    std::lock_guard<std::recursive_mutex> lk(g_state_mutex);
     for (const char* k : ABASER_CONFIG_KEYS)
         if (JsonExtractValue(line, k, &val)) { ApplyConfigKey(k, val); applied++; }
     return applied;
@@ -469,6 +519,7 @@ inline std::string BuildConfigJson()
 {
     char num[64];
     std::string o = "{\"config\":{";
+    std::lock_guard<std::recursive_mutex> lk(g_state_mutex);
     for (int i = 0; i < ABASER_CONFIG_KEY_COUNT; i++) {
         const char* k = ABASER_CONFIG_KEYS[i];
         if      (!strcmp(k, "left_bind"))       snprintf(num, sizeof(num), "%d", left_bind);
@@ -503,6 +554,7 @@ inline std::string BuildConfigJson()
 inline std::string BuildStatusJson(bool mc_found, float cps_l, float cps_r)
 {
     char buf[256];
+    std::lock_guard<std::recursive_mutex> lk(g_state_mutex);
     snprintf(buf, sizeof(buf),
         "{\"status\":{\"left_on\":%s,\"right_on\":%s,\"cps_l\":%.1f,\"cps_r\":%.1f,"
         "\"gui\":%s,\"spawn\":%s,\"ally\":%s,\"bow\":%s,\"mc\":%s}}",

@@ -473,6 +473,12 @@ static void PaintBackground(ImDrawList* dl)
 // ============================================================================
 void DrawUI(const AbaserUIHost& host, const char* version)
 {
+    // Every widget reads and writes the shared settings and the mod state
+    // flags — hold the state mutex for the whole frame pass. It is recursive:
+    // the Save/Load buttons below lock it again, and the platform thread
+    // (clicker engine, mod link) can't interleave a settings write mid-widget.
+    std::lock_guard<std::recursive_mutex> glock(g_state_mutex);
+
     ImGuiIO& io = ImGui::GetIO();
 
     // keep a couple of accent-derived theme colors fresh while the accent changes

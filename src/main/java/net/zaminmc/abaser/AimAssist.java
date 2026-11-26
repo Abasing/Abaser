@@ -248,9 +248,17 @@ public final class AimAssist {
             mc.thePlayer.rotationYaw   += stepYaw;
             mc.thePlayer.rotationPitch += stepPitch;
         } else {
-            // silent: feed the turn through the same entry point the mouse uses
+            // silent: feed the turn through the same entry point the mouse
+            // uses (EntityPlayerSP.setAngles). Verified against the 1.8.8
+            // implementation: setAngles applies rotationYaw += input * 0.15
+            // and rotationPitch -= input * 0.15 (the mouse convention, where
+            // a positive input pitches the view DOWN). stepYaw/stepPitch are
+            // already the exact degrees we want to turn, so convert them into
+            // setAngles input space: divide by the 0.15 mouse scaling and
+            // negate the pitch — without this the silent mode turned yaw at
+            // ~1/7 strength and pitched the WRONG way.
             final EntityPlayerSP self = (EntityPlayerSP) mc.thePlayer;
-            self.setAngles(stepYaw, stepPitch);
+            self.setAngles(stepYaw / 0.15F, -stepPitch / 0.15F);
         }
     }
 }

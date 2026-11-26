@@ -35,6 +35,18 @@ Improvements over the classic external clicker it descends from:
 
 - **accurate CPS by default** — the classic's delay math ran everything at
   ~2× the label value; "Legacy timing" brings that feel back if you miss it
+- **independent left/right timing** — both click channels run on one engine
+  thread but carry their own click deadlines, so the left clicker's
+  press/gap sleeps can no longer stall the right channel (a real defect of
+  the sequential loop: each side's effective CPS dropped under the other's
+  load). Presses are non-blocking DOWN-post + release-deadline pairs; the
+  loop sleeps only until the nearest deadline. The legacy right-click gap
+  also now reads the RIGHT channel's CPS range (it once read the left max),
+  and the whole timing math lives in one simulator-tested function
+- **race-free shared state** — the engine, the UI, the tray, the mod link
+  and the status streamer all touch the same settings and gate flags; every
+  access goes through one recursive state mutex (gates, config apply/save,
+  UI frame, snapshots) and the lifetime counters are atomics
 - **hold-to-click (classic) or always-click** activation
 - optional **focus gate** — no clicks while the game window is unfocused
 - the **right-chance slider is real** (the classic rolled the left chance
@@ -141,7 +153,7 @@ assist was removed — targeting is players-only.)
 | **Strength** | Overall pull toward the target (0–1) |
 | **Vertical / Horizontal** | Extra multipliers so you can keep pitch calmer than yaw |
 | **Smooth aim** | Turn only **Smooth** of the remaining angle per tick — a flick, not a snap |
-| **Silent aim** | Apply the same turn through the mouse's own entry point (`setAngles`) instead of writing the rotation fields |
+| **Silent aim** | Apply the same turn through the mouse's own entry point (`setAngles`) instead of writing the rotation fields. The mode converts the wanted degrees into `setAngles` input space — 1.8.8's `setAngles` multiplies the input by its own `0.15` mouse scaling and flips the pitch sign, so feeding it raw degrees turned yaw at ~1/7 strength and pitched the WRONG way (fixed: `setAngles(stepYaw / 0.15F, -stepPitch / 0.15F)`) |
 | **Require click** | Only assist while the attack key is held |
 | **Peace/team exceptions** | The mod parses the server's `You have peace with N player(s)` chat block (`- Name` lines follow) and never targets those players — live in memory, refreshed each time the server re-announces |
 | **Manual exceptions** | `/abaser except add|remove NAME` — players the assist (and the clicks) always skip; persisted |
