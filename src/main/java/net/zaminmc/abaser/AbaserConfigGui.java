@@ -185,8 +185,10 @@ public class AbaserConfigGui extends GuiScreen {
         final int[] fy = { py + 58, py + 74, py + 90 };     // X, Y, Z rows
         final int[] fx = { px + 20, px + 124 };             // min / max columns
         for (int i = 0; i < 6; i++) {
-            spawnField[i] = makeField(3 + i, fx[i % 2], fy[i / 2], i % 2 == 0 ? 88 : 92);
-            spawnBox[i] = new int[] { fx[i % 2], fy[i / 2], i % 2 == 0 ? 88 : 92, 13 };
+            // min fields 86 wide (was 88): keeps their box clear of the
+            // axis label at x + 4 and the ".." separator at x + 110
+            spawnField[i] = makeField(3 + i, fx[i % 2], fy[i / 2], i % 2 == 0 ? 86 : 92);
+            spawnBox[i] = new int[] { fx[i % 2], fy[i / 2], i % 2 == 0 ? 86 : 92, 13 };
             spawnField[i].setText(fmt(cur[i]));
         }
     }
@@ -514,8 +516,11 @@ public class AbaserConfigGui extends GuiScreen {
         // row 2
         toggleRow("Legacy timing", "legacy_timing", false, ax0, y + 18, ax0 + 104, mx, my);
         toggleRow("Block hit", "blockhit", false, col2, y + 18, ax1, mx, my);
-        // row 3 — the two new click gates
-        toggleRow("Ally hold", "allyHold", true, ax0, y + 32, ax0 + 104, mx, my);
+        // row 3 — the two new click gates. Ally hold is MOD-owned (it lives in
+        // config/abaser_aim.json; the exe never carries the key), so it is drawn
+        // from the mod's own config — drawing it from the exe's echo would pin
+        // the switch to its default forever (the echo has no such key).
+        drawToggleRow("Ally hold", AimAssist.cfg.allyHold, ax0, y + 32, ax0 + 104, mx, my, "allyHold");
         toggleRow("Spawn gate", "spawn_gate", true, col2, y + 32, ax1, mx, my);
         // row 4 — block-hit chance, only meaningful while block hit is on
         final int ry = y + 46;
@@ -532,16 +537,24 @@ public class AbaserConfigGui extends GuiScreen {
     private int bhW() { return 210; }
 
     private void toggleRow(String label, String key, boolean def, int x, int y, int rowRight, int mx, int my) {
+        drawToggleRow(label, getB(key, def), x, y, rowRight, mx, my, key);
+    }
+
+    /** Toggle row with an explicit value — for switches the mod owns itself. */
+    private void drawToggleRow(String label, boolean val, int x, int y, int rowRight, int mx, int my, String hitKey) {
         this.fontRendererObj.drawStringWithShadow(label, x, y + 1, C_TEXT);
         final int sx = rowRight - 22;
-        drawSwitch(sx, y, getB(key, def), inRect(mx, my, sx, y, 22, 11));
-        rowHit.put(key, new int[] { sx, y });
+        drawSwitch(sx, y, val, inRect(mx, my, sx, y, 22, 11));
+        rowHit.put(hitKey, new int[] { sx, y });
     }
 
     private final Map<String, int[]> rowHit = new HashMap<String, int[]>();
 
     private void drawThemeRow(int mx, int my) {
-        final int y = py + 196;
+        // py + 210, not 196: with Block hit on, its chance slider's track sits
+        // at py + 197..203 — the swatches used to overlap it (visually and in
+        // the click test, which matched the slider first).
+        final int y = py + 210;
         this.fontRendererObj.drawStringWithShadow("Theme", px + 14, y + 2, C_MUT);
         final int sw = 14, sh = 12, gap = 3;
         int x = px + PW - 10 - (PRESETS.length * sw + (PRESETS.length - 1) * gap);
@@ -884,11 +897,14 @@ public class AbaserConfigGui extends GuiScreen {
 
     private int spawnCardX()  { return px + 8; }
     private int spawnCardY()  { return py + 38; }
-    private int spawnGatesY() { return py + 144; }
+    private int spawnGatesY() { return py + 150; }
     private int[] aroundHit = null, applyHit = null, spawnAimHit = null, spawnClickHit = null;
 
     private void drawSpawnTab(int mx, int my) {
-        final int x = spawnCardX(), y = spawnCardY(), w = 228, h = 100;
+        // h = 106 (was 100): the radius row and the two buttons used to share
+        // y + 120..126 — the track crossed the buttons' tops and clicks there
+        // dragged the radius instead of pressing the buttons.
+        final int x = spawnCardX(), y = spawnCardY(), w = 228, h = 106;
         glassRect(x, y, w, h, C_CARD, C_CARD_EDGE);
         final boolean inside = AimAssist.inSpawn;
         this.fontRendererObj.drawStringWithShadow("Spawn box - exact 3D corners", x + 8, y + 4, C_DIM);
@@ -897,17 +913,19 @@ public class AbaserConfigGui extends GuiScreen {
         this.fontRendererObj.drawStringWithShadow(you, x + w - 8 - yw, y + 4, inside ? C_WARN : C_DIM);
 
         // coordinate rows (fields built in initGui with their final positions)
+        // axis labels at x + 4, not x + 8 — the min field's box starts at x + 19
+        // and used to clip the label's tail
         final String[] axis = { "X", "Y", "Z" };
         for (int r = 0; r < 3; r++) {
             final int ry = y + 20 + r * 16;
-            this.fontRendererObj.drawStringWithShadow(axis[r], x + 8, ry + 3, C_MUT);
+            this.fontRendererObj.drawStringWithShadow(axis[r], x + 4, ry + 3, C_MUT);
             this.fontRendererObj.drawStringWithShadow("..", x + 110, ry + 3, C_DIM);
             if (spawnField[r * 2]     != null) spawnField[r * 2].drawTextBox();
             if (spawnField[r * 2 + 1] != null) spawnField[r * 2 + 1].drawTextBox();
         }
 
         // radius slider — feeds "Box around me"
-        final int ry2 = y + 72;
+        final int ry2 = y + 70;
         this.fontRendererObj.drawStringWithShadow("Radius", x + 8, ry2, C_MUT);
         this.fontRendererObj.drawStringWithShadow(
                 String.format(Locale.ROOT, "%.0f", spawnRadius), x + 196, ry2, C_TEXT);
@@ -923,7 +941,7 @@ public class AbaserConfigGui extends GuiScreen {
         circle(kx, ty + th / 2.0f, 4.0f - 1.5f, 0xFFF2F3F7);
 
         // buttons
-        final int by = y + 84;
+        final int by = y + 90;
         final boolean ahov = inRect(mx, my, x + 8, by, 104, 13);
         glassRect(x + 8, by, 104, 13, ahov ? 0x30FFFFFF : C_DONE_BG, 0x2EFFFFFF);
         this.fontRendererObj.drawStringWithShadow("Box around me", x + 26, by + 3, C_TEXT);
@@ -957,7 +975,7 @@ public class AbaserConfigGui extends GuiScreen {
         final String line = spawnErr != null ? spawnErr
                 : inside ? "inside the box - aim freezes and clicks hold"
                          : "outside the box - nothing is held";
-        this.fontRendererObj.drawStringWithShadow(line, px + 14, py + 200,
+        this.fontRendererObj.drawStringWithShadow(line, px + 14, py + 204,
                 spawnErr != null ? C_BAD : (inside ? C_WARN : C_DIM));
         doneButton(mx, my);
     }
@@ -994,10 +1012,12 @@ public class AbaserConfigGui extends GuiScreen {
         spawnErr = null;
     }
 
-    /** Radius track geometry (draw + click + drag). */
+    /** Radius track geometry (draw + click + drag). Must match drawSpawnTab:
+     *  track at y + 80 (label y + 70); the hit band stops at ty + 8 so it can
+     *  never reach the buttons at y + 90. */
     private boolean radiusHit(int mx, int my) {
-        final int tx = spawnCardX() + 56, ty = spawnCardY() + 72 + 10;
-        return my >= ty - 2 && my <= ty + 10 && mx >= tx - 2 && mx <= tx + 132 + 2;
+        final int tx = spawnCardX() + 56, ty = spawnCardY() + 70 + 10;
+        return my >= ty - 2 && my <= ty + 8 && mx >= tx - 2 && mx <= tx + 132 + 2;
     }
 
     private void radiusApply(int mx) {
@@ -1252,9 +1272,22 @@ public class AbaserConfigGui extends GuiScreen {
             if (lockAdd != null && lockAdd.isFocused()) { addFromField(lockAdd, false); return; }
         }
         if (keyCode == Keyboard.KEY_ESCAPE) { rememberTab(); close(); return; }
-        if (ClientProxy.panelKey != null && keyCode == ClientProxy.panelKey.getKeyCode()) {
+        // the panel key (Right Shift by default) closes the panel — but NOT
+        // while a text field is focused: RSHIFT is how users type capital
+        // letters into the Friends tab, and the old check slammed the panel
+        // shut on the first capital letter.
+        if (ClientProxy.panelKey != null && keyCode == ClientProxy.panelKey.getKeyCode()
+                && !anyFieldFocused()) {
             rememberTab(); close();
         }
+    }
+
+    /** True while any text field on this screen has keyboard focus. */
+    private boolean anyFieldFocused() {
+        if (exAdd != null && exAdd.isFocused()) return true;
+        if (lockAdd != null && lockAdd.isFocused()) return true;
+        for (GuiTextField f : spawnField) if (f != null && f.isFocused()) return true;
+        return false;
     }
 
     private void rememberTab() { lastTab = tab; }

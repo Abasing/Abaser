@@ -88,6 +88,9 @@ public class ClientTickHandler {
 
     private static boolean worldJoined;     // saw a world/server load this session
     private static boolean launchFailed;    // complained once about a missing exe
+    private static boolean startFailed;     // complained once about a failed start
+    private static boolean launching;       // a launch attempt is in flight
+    private static int     relaunchTicks;   // ticks since the exe was last alive
     private static boolean lastGui;
     private static boolean lastBow;
     private static boolean lastSpawn;
@@ -160,6 +163,18 @@ public class ClientTickHandler {
             worldJoined = false;
         }
 
+        // ---- 1b. the exe died mid-session: bring it back automatically ------
+        // A crash, a tray "Exit" or a failed file update must not leave the
+        // user clicker-less until the next relog — retry quietly every ~10 s
+        // (200 ticks) while a world is open. Complaints are latched so a
+        // persistently blocked exe cannot spam the chat.
+        if (clicker != null || launching) {
+            relaunchTicks = 0;
+        } else if (inWorld && ++relaunchTicks >= 200) {
+            relaunchTicks = 0;
+            tryLaunch(mc);
+        }
+
         if (clicker == null) return;
 
         // ---- 2. feed state: any open GUI + what the player is holding ----
@@ -208,39 +223,47 @@ public class ClientTickHandler {
      * comes back through chat + the link threads.
      */
     private static void tryLaunch(final Minecraft mc) {
-        if (clicker != null) return;
+        if (clicker != null || launching) return;   // already running, or one is being started
+        launching = true;
         new Thread(new Runnable() {
             public void run() {
-                exeInstalledHere = false;
-                final File exe = resolveExe(mc);
-                if (exe == null) {
-                    if (!launchFailed) {
-                        launchFailed = true;
-                        chat("AbaserClicker.exe not found - drop it in the game folder or the mods folder.");
-                    }
-                    return;
-                }
-                // retire any stray instance FIRST: the child we start must win
-                // the single-instance mutex (see killStrayClickers)
-                killStrayClickers();
                 try {
-                    Process p = new ProcessBuilder(exe.getAbsolutePath(), "--managed", "/tray")
-                            .start();
-                    clicker = p;
-                    toClicker = new BufferedWriter(new OutputStreamWriter(p.getOutputStream(), StandardCharsets.US_ASCII));
-                    haveLast = false;
-                    LinkState.reset();
-                    startStdoutReader(p);
-                    chat(exeInstalledHere
-                            ? "Bundled clicker installed to .minecraft/Abaser - Abaser Clicker is running in your system tray."
-                            : "Abaser Clicker is running in your system tray - it clicks only inside Minecraft.");
-                    // the exe dumps its current settings on the first line it
-                    // sees; asking explicitly too keeps the panel in sync even
-                    // if a heartbeat raced the handshake
-                    sendConfigLine("{\"get\":\"config\"}");
-                } catch (IOException e) {
-                    Abaser.logger.warn("Abaser: could not start AbaserClicker.exe", e);
-                    chat("Found AbaserClicker.exe but could not start it (see log).");
+                    exeInstalledHere = false;
+                    final File exe = resolveExe(mc);
+                    if (exe == null) {
+                        if (!launchFailed) {
+                            launchFailed = true;
+                            chat("AbaserClicker.exe not found - drop it in the game folder or the mods folder.");
+                        }
+                        return;
+                    }
+                    // retire any stray instance FIRST: the child we start must win
+                    // the single-instance mutex (see killStrayClickers)
+                    killStrayClickers();
+                    try {
+                        Process p = new ProcessBuilder(exe.getAbsolutePath(), "--managed", "/tray")
+                                .start();
+                        clicker = p;
+                        toClicker = new BufferedWriter(new OutputStreamWriter(p.getOutputStream(), StandardCharsets.US_ASCII));
+                        haveLast = false;
+                        LinkState.reset();
+                        startStdoutReader(p);
+                        chat(exeInstalledHere
+                                ? "Bundled clicker installed to .minecraft/Abaser - Abaser Clicker is running in your system tray."
+                                : "Abaser Clicker is running in your system tray - it clicks only inside Minecraft.");
+                        // the exe dumps its current settings on the first line it
+                        // sees; asking explicitly too keeps the panel in sync even
+                        // if a heartbeat raced the handshake
+                        sendConfigLine("{\"get\":\"config\"}");
+                    } catch (IOException e) {
+                        Abaser.logger.warn("Abaser: could not start AbaserClicker.exe", e);
+                        if (!startFailed) {
+                            startFailed = true;
+                            chat("Found AbaserClicker.exe but could not start it (see log).");
+                        }
+                    }
+                } finally {
+                    launching = false;
                 }
             }
         }, "Abaser-Launch").start();

@@ -94,12 +94,16 @@ public final class AimAssistConfig {
         return s == null ? "" : s.trim().toLowerCase(Locale.ROOT);
     }
 
-    /** Add a name if not present (case-insensitive). True when added. */
+    /** Add a name if not present (case-insensitive). True when added.
+     *  Stores the trimmed ORIGINAL case — every lookup normalizes anyway,
+     *  and the Friends tab reads these lists for display, so storing the
+     *  pre-lowered string made it show "mr_criminal" instead of
+     *  "Mr_Criminal". */
     private static boolean addName(List<String> list, String name) {
         final String k = norm(name);
         if (k.isEmpty() || k.length() > 16) return false;
         for (String s : list) if (norm(s).equals(k)) return false;
-        list.add(k);
+        list.add(name.trim());
         return true;
     }
 
